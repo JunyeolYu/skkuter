@@ -32,3 +32,6 @@
 *.app
 
 **/__pycache__/
+**/skkuter_op/build/
+**/skkuter_op/dist/
+**/skkuter_op/*.egg-info/
