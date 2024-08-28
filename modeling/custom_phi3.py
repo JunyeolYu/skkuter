@@ -332,10 +332,10 @@ class Phi3Attention(nn.Module):
 
     def _init_rope(self):
         if self.rope_scaling is None:
-            self.rotary_emb = Phi3RotaryEmbedding(
+            self.rotary_emb = skkuter_op.Phi3RotaryEmbedding(
                 self.head_dim,
-                max_position_embeddings=self.max_position_embeddings,
-                base=self.rope_theta,
+                self.max_position_embeddings,
+                self.rope_theta,
             )
         else:
             scaling_type = self.config.rope_scaling["type"]
@@ -378,7 +378,8 @@ class Phi3Attention(nn.Module):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
+        # for only RotaryEmbedding
+        cos, sin = self.rotary_emb.forward(value_states, position_ids) #seq_len=kv_seq_len
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 

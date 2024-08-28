@@ -73,6 +73,39 @@ torch::Tensor attention_forward(
     return attn_output;
 }
 
+class Phi3RotaryEmbedding {
+public:
+    Phi3RotaryEmbedding(int64_t dim, int64_t max_position_embeddings, double base)
+        : dim(dim), max_position_embeddings(max_position_embeddings), base(base) {
+        
+        auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA); // 
+        inv_freq = 1.0 / (torch::pow(base, torch::arange(0, dim, 2, options) / dim));
+    }
+
+    std::vector<torch::Tensor> forward(torch::Tensor x, torch::Tensor position_ids) {
+        // x: [bs, num_attention_heads, seq_len, head_size]
+        auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).to(torch::kFloat32).expand({position_ids.size(0), -1, 1});
+        auto position_ids_expanded = position_ids.unsqueeze(1).to(torch::kFloat32);
+        // Force float32 since bfloat16 loses precision on long contexts
+        // FIXME: implement torch.autocast()
+        auto freqs = torch::matmul(inv_freq_expanded, position_ids_expanded).transpose(1, 2);
+        auto emb = torch::cat({freqs, freqs}, -1);
+        auto cos = emb.cos();
+        auto sin = emb.sin();
+
+        return {cos.to(x.dtype()), sin.to(x.dtype())};
+    }
+
+private:
+    int64_t dim;
+    int64_t max_position_embeddings;
+    double base;
+    torch::Tensor inv_freq;
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
+    py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
+        .def(py::init<int64_t, int64_t, double>())
+        .def("forward", &Phi3RotaryEmbedding::forward);
 }
