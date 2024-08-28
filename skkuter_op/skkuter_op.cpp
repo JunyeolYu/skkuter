@@ -14,12 +14,12 @@ torch::Tensor attention_forward(
     int64_t q_len,
     int64_t kv_seq_len,
     double attention_dropout,
-    bool training) {
+    int64_t hidden_size) {
 
-    // Calculate attention weights
+    // calculate attention weights
     auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
 
-    // Check attention weights size
+    // check attention weights size
     if (attn_weights.sizes() != std::vector<int64_t>{bsz, num_heads, q_len, kv_seq_len}) {
         throw std::runtime_error("Attention weights should be of size (" + 
                                   std::to_string(bsz) + ", " + 
@@ -32,7 +32,7 @@ torch::Tensor attention_forward(
                                   std::to_string(attn_weights.size(3)));
     }
 
-    // Apply attention mask if provided
+    // apply attention mask if provided
     if (attention_mask.defined()) {
         if (attention_mask.sizes() != std::vector<int64_t>{bsz, 1, q_len, kv_seq_len}) {
             throw std::runtime_error("Attention mask should be of size (" + 
@@ -47,16 +47,14 @@ torch::Tensor attention_forward(
         attn_weights = attn_weights + attention_mask;
     }
 
-    // Upcast to fp32 and apply softmax
+    // upcast to fp32
     attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
+    attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout).training(false));
 
-    // Apply dropout
-    attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout).training(training));
-
-    // Calculate attention output
+    // calculate attention output
     auto attn_output = torch::matmul(attn_weights, value_states);
 
-    // Check attention output size
+    // check attention output size
     if (attn_output.sizes() != std::vector<int64_t>{bsz, num_heads, q_len, head_dim}) {
         throw std::runtime_error("`attn_output` should be of size (" + 
                                   std::to_string(bsz) + ", " + 
@@ -70,7 +68,7 @@ torch::Tensor attention_forward(
     }
 
     attn_output = attn_output.transpose(1, 2).contiguous();
-    // attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+    attn_output = attn_output.reshape({bsz, q_len, hidden_size});
 
     return attn_output;
 }

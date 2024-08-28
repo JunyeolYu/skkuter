@@ -50,6 +50,7 @@ from transformers.utils import (
 )
 from .configuration_phi3 import Phi3Config
 
+import skkuter_op # Our custom c++ extention
 
 logger = logging.get_logger(__name__)
 
@@ -121,7 +122,7 @@ class Phi3RotaryEmbedding(nn.Module):
         self.base = base
         self.register_buffer("inv_freq", None, persistent=False)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def forward(self, x, position_ids, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if self.inv_freq is None:
@@ -389,35 +390,19 @@ class Phi3Attention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
-            attn_weights = attn_weights + attention_mask
-
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-
-        attn_output = torch.matmul(attn_weights, value_states)
-
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        # attention_forward
+        attn_output = skkuter_op.attention_forward(
+                                        query_states,
+                                        key_states,
+                                        value_states,
+                                        attention_mask,
+                                        self.head_dim,
+                                        bsz,
+                                        self.num_heads,
+                                        q_len,
+                                        kv_seq_len,
+                                        self.attention_dropout,
+                                        self.hidden_size)
 
         attn_output = self.o_proj(attn_output)
 
@@ -940,7 +925,7 @@ class Phi3PreTrainedModel(PreTrainedModel):
     _no_split_modules = ["Phi3DecoderLayer"]
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
-    _supports_sdpa = False
+    _supports_sdpa = True
     _supports_cache_class = True
 
     _version = "0.0.5"
