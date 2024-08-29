@@ -57,7 +57,7 @@ torch::Tensor attention_forward(
 
     // upcast to fp32
     attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
-    attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout).training(false));
+    attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout));
 
     // calculate attention output
     auto attn_output = torch::matmul(attn_weights, value_states);
@@ -95,6 +95,26 @@ torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep) {
     return hidden_states.reshape({batch, num_key_value_heads * n_rep, slen, head_dim});
 }
 
+torch::Tensor rotate_half(torch::Tensor x) {
+    auto half = x.size(-1) / 2;
+    return torch::cat({-x.slice(-1, half), x.slice(-1, 0, half)}, -1);
+}
+
+std::tuple<torch::Tensor, torch::Tensor> apply_rotary_pos_emb(
+    torch::Tensor q,
+    torch::Tensor k,
+    torch::Tensor cos,
+    torch::Tensor sin,
+    torch::optional<torch::Tensor> position_id,
+    int64_t unsqueeze_dim = 1) {
+    
+    cos = cos.unsqueeze(unsqueeze_dim);
+    sin = sin.unsqueeze(unsqueeze_dim);
+    auto q_embed = (q * cos) + (rotate_half(q) * sin);
+    auto k_embed = (k * cos) + (rotate_half(k) * sin);
+    return std::make_tuple(q_embed, k_embed);
+}
+
 class Phi3RotaryEmbedding {
 public:
     Phi3RotaryEmbedding(int64_t dim, int64_t max_position_embeddings, double base)
@@ -127,6 +147,7 @@ private:
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
+    m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
