@@ -378,7 +378,7 @@ class Phi3Attention(nn.Module):
                     "with a layer index."
                 )
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        # for only RotaryEmbedding
+        # for RotaryEmbedding
         cos, sin = self.rotary_emb.forward(value_states, position_ids) #seq_len=kv_seq_len
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
@@ -386,10 +386,6 @@ class Phi3Attention(nn.Module):
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = skkuter_op.repeat_kv(key_states, self.num_key_value_groups)
-        value_states = skkuter_op.repeat_kv(value_states, self.num_key_value_groups)
 
         # attention_forward
         attn_output = skkuter_op.attention_forward(
@@ -403,7 +399,8 @@ class Phi3Attention(nn.Module):
                                         q_len,
                                         kv_seq_len,
                                         self.attention_dropout,
-                                        self.hidden_size)
+                                        self.hidden_size,
+                                        self.num_key_value_groups)
 
         attn_output = self.o_proj(attn_output)
 
@@ -828,7 +825,7 @@ class Phi3DecoderLayer(nn.Module):
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
         self.mlp = Phi3MLP(config)
-        self.input_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = skkuter_op.Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
 
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
@@ -868,7 +865,7 @@ class Phi3DecoderLayer(nn.Module):
 
         residual = hidden_states
 
-        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.input_layernorm.forward(hidden_states)
 
         # Self Attention
         attn_outputs, self_attn_weights, present_key_value = self.self_attn(
@@ -883,11 +880,10 @@ class Phi3DecoderLayer(nn.Module):
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
 
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + self.resid_mlp_dropout(hidden_states)
-
-        outputs = (hidden_states,)
+        # hidden_states = self.post_attention_layernorm(hidden_states)
+        # hidden_states = self.mlp(hidden_states)
+        # hidden_states = residual + self.resid_mlp_dropout(hidden_states)
+        outputs = (residual + self.resid_mlp_dropout(self.mlp(self.post_attention_layernorm(hidden_states))),)
 
         if output_attentions:
             outputs += (self_attn_weights,)

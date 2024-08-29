@@ -1,7 +1,10 @@
 #include <torch/extension.h>
+#include <torch/torch.h>
 #include "ATen/ATen.h"
 #include <cmath>
 #include <vector>
+
+torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep);
 
 torch::Tensor attention_forward(
     torch::Tensor query_states,
@@ -14,7 +17,12 @@ torch::Tensor attention_forward(
     int64_t q_len,
     int64_t kv_seq_len,
     double attention_dropout,
-    int64_t hidden_size) {
+    int64_t hidden_size,
+    int64_t num_key_value_groups) {
+    
+    // repeat k/v heads if n_kv_heads < n_heads
+    key_states = repeat_kv(key_states, num_key_value_groups);
+    value_states = repeat_kv(value_states, num_key_value_groups);
 
     // calculate attention weights
     auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
