@@ -145,10 +145,19 @@ private:
     torch::Tensor inv_freq;
 };
 
+torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
+    auto input_dtype = hidden_states.scalar_type();
+    hidden_states = hidden_states.to(torch::kFloat32);
+    auto variance = hidden_states.pow(2).mean(-1, true);
+    hidden_states = hidden_states * torch::rsqrt(variance + eps);
+    return hidden_states.to(input_dtype);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
+    m.def("norm_forward", &norm_forward, "norm_forward");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
