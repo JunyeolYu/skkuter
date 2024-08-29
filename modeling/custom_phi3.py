@@ -825,7 +825,7 @@ class Phi3DecoderLayer(nn.Module):
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
 
         self.mlp = Phi3MLP(config)
-        self.input_layernorm = skkuter_op.Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
 
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
         self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
