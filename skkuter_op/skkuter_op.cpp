@@ -157,7 +157,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
-    m.def("norm_forward", &norm_forward, "norm_forward");
+    m.def("RMSnorm_forward", &RMSnorm_forward, "RMSnorm_forward");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
