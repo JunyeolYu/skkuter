@@ -388,8 +388,8 @@ class Phi3Attention(nn.Module):
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
+        key_states = skkuter_op.repeat_kv(key_states, self.num_key_value_groups)
+        value_states = skkuter_op.repeat_kv(value_states, self.num_key_value_groups)
 
         # attention_forward
         attn_output = skkuter_op.attention_forward(

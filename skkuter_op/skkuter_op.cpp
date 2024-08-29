@@ -73,6 +73,20 @@ torch::Tensor attention_forward(
     return attn_output;
 }
 
+torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep) {
+    //This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+    //num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    auto size =  hidden_states.sizes();
+    auto batch = size[0];
+    auto num_key_value_heads = size[1];
+    auto slen = size[2];
+    auto head_dim = size[3];
+
+    if (n_rep == 1) return hidden_states;
+    hidden_states = hidden_states.unsqueeze(2).expand({batch, num_key_value_heads, n_rep, slen, head_dim});
+    return hidden_states.reshape({batch, num_key_value_heads * n_rep, slen, head_dim});
+}
+
 class Phi3RotaryEmbedding {
 public:
     Phi3RotaryEmbedding(int64_t dim, int64_t max_position_embeddings, double base)
@@ -104,6 +118,7 @@ private:
 };
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
