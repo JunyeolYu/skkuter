@@ -50,7 +50,7 @@ from transformers.utils import (
 )
 from .configuration_phi3 import Phi3Config
 
-import skkuter_op # Our custom c++ extention
+import skkuter_op # Our custom c++ extention + Test commit
 
 logger = logging.get_logger(__name__)
 
@@ -328,7 +328,7 @@ class Phi3Attention(nn.Module):
 
     def _init_rope(self):
         if self.rope_scaling is None:
-            self.rotary_emb = skkuter_op.Phi3RotaryEmbedding(
+            self.rotary_emb = Phi3RotaryEmbedding(
                 self.head_dim,
                 self.max_position_embeddings,
                 self.rope_theta,
