@@ -75,7 +75,7 @@ torch::Tensor attention_forward(
                                   std::to_string(attn_output.size(3)));
     }
 
-    attn_output = attn_output.transpose(1, 2).contiguous();
+    attn_output = attn_output.transpose(1, 2);//.contiguous();
     attn_output = attn_output.reshape({bsz, q_len, hidden_size});
 
     return attn_output;
@@ -153,11 +153,29 @@ torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
     return hidden_states.to(input_dtype);
 }
 
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> qkv_split(
+    torch::Tensor qkv, int64_t num_heads, int64_t head_dim, int64_t num_key_value_heads) {
+
+    auto bsz = qkv.size(0);
+    auto q_len = qkv.size(1);
+    auto pos = num_heads * head_dim;
+    auto query_states = qkv.slice(-1, 0, pos);
+    auto key_states = qkv.slice(-1, pos, pos + num_key_value_heads * head_dim);
+    auto value_states = qkv.slice(-1, pos + num_key_value_heads * head_dim, qkv.size(-1));
+
+    query_states = query_states.view({bsz, q_len, num_heads, head_dim}).transpose(1, 2);
+    key_states = key_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
+    value_states = value_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
+
+    return std::make_tuple(query_states, key_states, value_states);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
     m.def("RMSnorm_forward", &RMSnorm_forward, "RMSnorm_forward");
+    m.def("qkv_split", &qkv_split, "qkv_split");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);

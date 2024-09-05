@@ -355,15 +355,8 @@ class Phi3Attention(nn.Module):
 
         bsz, q_len, _ = hidden_states.size()
 
-        qkv = self.qkv_proj(hidden_states)
-        query_pos = self.num_heads * self.head_dim
-        query_states = qkv[..., :query_pos]
-        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
-        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states, key_states, value_states = skkuter_op.qkv_split(
+                self.qkv_proj(hidden_states), self.num_heads, self.head_dim, self.num_key_value_heads)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
@@ -1208,6 +1201,7 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
         return self.model
 
     # Ignore copy
+    @torch.inference_mode()
     @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(
