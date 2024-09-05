@@ -170,6 +170,20 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> qkv_split(
     return std::make_tuple(query_states, key_states, value_states);
 }
 
+struct Linear_skkuter : torch::nn::Module {
+    Linear_skkuter(torch::Tensor weight) {
+        linear = torch::nn::Linear(torch::nn::LinearOptions(weight.size(0), weight.size(1)).bias(false));
+        register_module("linear", linear);
+        linear->weight = weight.clone(); 
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        return linear->forward(x);
+    }
+
+    torch::nn::Linear linear{nullptr};
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -179,4 +193,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
+    py::class_<Linear_skkuter, torch::nn::Module, std::shared_ptr<Linear_skkuter>>(m, "Linear_skkuter")
+        .def(py::init<torch::Tensor>())
+        .def("__call__", &Linear_skkuter::forward)
+        .def("forward", &Linear_skkuter::forward);
 }
