@@ -314,7 +314,7 @@ class Phi3Attention(nn.Module):
         self.rope_theta = config.rope_theta
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
-        self.isInit = False
+        # self.isInit = False
         
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -355,15 +355,15 @@ class Phi3Attention(nn.Module):
         logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
         
         # Copy from original *_proj weights
-        if self.isInit is False:
-            self.isInit = True
-            my_o_proj = skkuter_op.Linear_skkuter(self.o_proj.weight.data)
-            del self.o_proj
-            my_qkv_proj = skkuter_op.Linear_skkuter(self.qkv_proj.weight.data)
-            del self.qkv_proj
+        # if self.isInit is False:
+        #     self.isInit = True
+        #     my_o_proj = skkuter_op.Linear_skkuter(self.o_proj.weight.data)
+        #     del self.o_proj
+        #     my_qkv_proj = skkuter_op.Linear_skkuter(self.qkv_proj.weight.data)
+        #     del self.qkv_proj
             
-            self.o_proj = my_o_proj
-            self.qkv_proj = my_qkv_proj
+        #     self.o_proj = my_o_proj
+        #     self.qkv_proj = my_qkv_proj
             
         bsz, q_len, _ = hidden_states.size()
 
