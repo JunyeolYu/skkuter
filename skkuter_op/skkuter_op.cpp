@@ -184,6 +184,19 @@ struct Linear_skkuter : torch::nn::Module {
     torch::nn::Linear linear{nullptr};
 };
 
+struct Dropout_skkuter : torch::nn::Module {
+    Dropout_skkuter(double prob) {
+        dropout = torch::nn::Dropout(torch::nn::DropoutOptions().p(prob));
+        register_module("dropout", dropout);
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        return dropout->forward(x);
+    }
+
+    torch::nn::Dropout dropout{nullptr};
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -197,4 +210,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def(py::init<torch::Tensor>())
         .def("__call__", &Linear_skkuter::forward)
         .def("forward", &Linear_skkuter::forward);
+    py::class_<Dropout_skkuter, torch::nn::Module, std::shared_ptr<Dropout_skkuter>>(m, "Dropout_skkuter")
+        .def(py::init<double>())
+        .def("__call__", &Dropout_skkuter::forward)
+        .def("forward", &Dropout_skkuter::forward);
 }

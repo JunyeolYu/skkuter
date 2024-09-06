@@ -829,8 +829,8 @@ class Phi3DecoderLayer(nn.Module):
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
 
-        self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
-        self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
+        self.resid_attn_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
+        self.resid_mlp_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -1031,7 +1031,7 @@ class Phi3Model(Phi3PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.embed_dropout = nn.Dropout(config.embd_pdrop)
+        self.embed_dropout = skkuter_op.Dropout_skkuter(config.embd_pdrop)
         self.layers = nn.ModuleList(
             [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
