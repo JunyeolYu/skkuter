@@ -3,6 +3,7 @@
 #include "ATen/ATen.h"
 #include <cmath>
 #include <vector>
+#include <pybind11/pybind11.h>
 
 torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep);
 
@@ -197,6 +198,33 @@ struct Dropout_skkuter : torch::nn::Module {
     torch::nn::Dropout dropout{nullptr};
 };
 
+struct Cache_skkuter {
+    py::object dynamic_cache;
+    // store object
+    void set_dynamic_cache(py::object cache_obj) {
+        dynamic_cache = cache_obj;
+    }
+
+    int64_t get_usable_length(int64_t kv_seq_len, int64_t layer_idx) {
+        // py::gil_scoped_acquire acquire;
+        if (dynamic_cache) {
+            auto run = dynamic_cache.attr("get_usable_length")(kv_seq_len, layer_idx);
+            return py::cast<int>(run);
+        }
+        // py::gil_scoped_release release;
+    }
+
+    std::tuple<torch::Tensor, torch::Tensor> update(torch::Tensor k, torch::Tensor v, int64_t layer_idx, py::dict args) {
+        // py::gil_scoped_acquire acquire;
+        if (dynamic_cache) {
+            py::tuple result = dynamic_cache.attr("update")(k, v, layer_idx, args);
+            return std::make_tuple(result[0].cast<torch::Tensor>(), result[1].cast<torch::Tensor>());
+        }
+        // py::gil_scoped_release release;
+    }
+};
+
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -214,4 +242,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def(py::init<double>())
         .def("__call__", &Dropout_skkuter::forward)
         .def("forward", &Dropout_skkuter::forward);
+    py::class_<Cache_skkuter, std::shared_ptr<Cache_skkuter>>(m, "Cache_skkuter")
+        .def(py::init<>())
+        .def("set_dynamic_cache", &Cache_skkuter::set_dynamic_cache)
+        .def("get_usable_length", &Cache_skkuter::get_usable_length)
+        .def("update", &Cache_skkuter::update);
 }
