@@ -371,6 +371,8 @@ class Phi3Attention(nn.Module):
                 self.qkv_proj(hidden_states), self.num_heads, self.head_dim, self.num_key_value_heads)
 
         kv_seq_len = key_states.shape[-2]
+        past_key_value_ = skkuter_op.Cache_skkuter()
+        past_key_value_.set_dynamic_cache(past_key_value)        
         if past_key_value is not None:
             if self.layer_idx is None:
                 raise ValueError(
@@ -378,7 +380,7 @@ class Phi3Attention(nn.Module):
                     "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                     "with a layer index."
                 )
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+            kv_seq_len += past_key_value_.get_usable_length(kv_seq_len, self.layer_idx)
         # for RotaryEmbedding
         cos, sin = self.rotary_emb.forward(value_states, position_ids) #seq_len=kv_seq_len
 
@@ -387,8 +389,7 @@ class Phi3Attention(nn.Module):
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-
+            key_states, value_states = past_key_value_.update(key_states, value_states, self.layer_idx, cache_kwargs)
         # attention_forward
         attn_output = skkuter_op.attention_forward(
                                         query_states,
