@@ -328,7 +328,7 @@ class Phi3Attention(nn.Module):
 
     def _init_rope(self):
         if self.rope_scaling is None:
-            self.rotary_emb = Phi3RotaryEmbedding(
+            self.rotary_emb = skkuter_op.Phi3RotaryEmbedding(
                 self.head_dim,
                 self.max_position_embeddings,
                 self.rope_theta,
@@ -384,6 +384,8 @@ class Phi3Attention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
+
+
         # attention_forward
         attn_output = skkuter_op.attention_forward(
                                         query_states,
@@ -399,6 +401,8 @@ class Phi3Attention(nn.Module):
                                         self.hidden_size,
                                         self.num_key_value_groups)
 
+
+        attn_output = attn_output.to(torch.bfloat16)
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -715,7 +719,6 @@ class Phi3FlashAttention2(Phi3Attention):
             (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
         )
 
-
 # copied from transformers.models.llama.modeling_llama.LlamaSdpaAttention with Llama->Phi3
 # TODO @Arthur no longer copied from LLama after static cache
 class Phi3SdpaAttention(Phi3Attention):
@@ -859,6 +862,8 @@ class Phi3DecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+
+        #outputs = skkuter_op.custom_decoder()
 
         residual = hidden_states
 
@@ -1085,6 +1090,7 @@ class Phi3Model(Phi3PreTrainedModel):
 
         if use_cache:
             use_legacy_cache = not isinstance(past_key_values, Cache)
+
             if use_legacy_cache:
                 past_key_values = DynamicCache.from_legacy_cache(past_key_values)
             past_key_values_length = past_key_values.get_usable_length(seq_length)

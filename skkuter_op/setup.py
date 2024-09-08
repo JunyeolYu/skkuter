@@ -1,13 +1,16 @@
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CppExtension
+from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
 
 setup(
     name='skkuter_op',
     ext_modules=[
-        CppExtension(
+        CUDAExtension(
             name='skkuter_op',
-            sources=['skkuter_op.cpp'],
-            extra_compile_args=['-O3'],
+            sources=['skkuter_op.cpp', 'attn.cu'],
+
+            extra_compile_args={'cxx': ['-O3'],'nvcc': ['-O3']},
+            extra_link_flags=['-Wl,--no-as-needed', '-lcuda']
         )],
     cmdclass={'build_ext': BuildExtension}
 )
+
