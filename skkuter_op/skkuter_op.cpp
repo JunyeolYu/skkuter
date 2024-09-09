@@ -223,6 +223,124 @@ struct Linear {
     }
 };
 
+struct DecoderLayer {
+    DecoderLayer(py::object config, int64_t layer) {
+        cache = Cache_skkuter();
+        layer_idx = layer;
+        // Init 
+        attention_dropout = config.attr("attention_dropout").cast<double>();
+        hidden_size = config.attr("hidden_size").cast<int64_t>();
+        num_heads = config.attr("num_attention_heads").cast<int64_t>();
+        head_dim = hidden_size / num_heads;
+        num_key_value_heads = config.attr("num_key_value_heads").cast<int64_t>();
+        num_key_value_groups = num_heads / num_key_value_heads;
+        max_position_embeddings = config.attr("max_position_embeddings").cast<int64_t>();
+        original_max_position_embeddings = config.attr("original_max_position_embeddings").cast<int64_t>();
+        is_causal = true;
+
+        // init rope
+        auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+        inv_freq = 1.0 / (torch::pow(config.attr("rope_theta").cast<double>(), torch::arange(0, head_dim, 2, options) / head_dim));
+    }
+
+    std::tuple<torch::Tensor, py::object> forward(torch::Tensor hidden_states, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions, bool use_cache ) {
+        // qkv_split
+        auto qkv = torch::matmul(hidden_states, qkv_proj.t());
+        auto bsz = qkv.size(0);
+        auto q_len = qkv.size(1);
+        auto pos = num_heads * head_dim;
+        auto query_states = qkv.slice(-1, 0, pos);
+        auto key_states = qkv.slice(-1, pos, pos + num_key_value_heads * head_dim);
+        auto value_states = qkv.slice(-1, pos + num_key_value_heads * head_dim, qkv.size(-1));
+
+        query_states = query_states.view({bsz, q_len, num_heads, head_dim}).transpose(1, 2);
+        key_states = key_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
+        value_states = value_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
+
+        // cache
+        auto kv_seq_len = key_states.size(-2);
+        cache.set_dynamic_cache(past_key_value);
+        kv_seq_len += cache.get_usable_length(kv_seq_len, layer_idx);
+
+        // rotary_embed
+        auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).to(torch::kFloat32).expand({position_ids.size(0), -1, 1});
+        auto position_ids_expanded = position_ids.unsqueeze(1).to(torch::kFloat32);
+        // Force float32 since bfloat16 loses precision on long contexts
+        // FIXME: implement torch.autocast()
+        auto freqs = torch::matmul(inv_freq_expanded, position_ids_expanded).transpose(1, 2);
+        auto emb = torch::cat({freqs, freqs}, -1);
+        auto cos = emb.cos();
+        auto sin = emb.sin();
+        cos = cos.to(value_states.dtype());
+        sin = sin.to(value_states.dtype());
+
+        // apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids, unsqueeze_dim = 1);
+        auto cos_ = cos.unsqueeze(1); //unsqueeze_dim
+        auto sin_ = sin.unsqueeze(1);
+        query_states = (query_states * cos_) + (rotate_half(query_states) * sin_);
+        key_states = (key_states * cos_) + (rotate_half(key_states) * sin_);
+
+        // cache update
+        py::dict cache_kwargs;
+        cache_kwargs["sin"] = sin;
+        cache_kwargs["cos"] = cos;
+        std::tuple res2 = cache.update(key_states, value_states, layer_idx, cache_kwargs);
+
+        // forward
+        // auto key = std::get<0>(res2);
+        // auto value = std::get<1>(res2);
+
+        // // Attnetion
+        // auto attn_weights = torch::matmul(query_states, key.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
+        // attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value.scalar_type());
+        // attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout));
+
+        // auto attn_output = torch::matmul(attn_weights, value);
+        // attn_output = attn_output.transpose(1, 2);//.contiguous();
+        // attn_output = attn_output.reshape({bsz, q_len, hidden_size});
+        // attn_output = torch::matmul(attn_output, o_proj.t());
+
+        auto attn_output = attention_forward(
+                            query_states,
+                            std::get<0>(res2),
+                            std::get<1>(res2),
+                            attention_mask,
+                            head_dim,
+                            bsz,
+                            num_heads,
+                            q_len,
+                            kv_seq_len,
+                            attention_dropout,
+                            hidden_size,
+                            num_key_value_groups, 
+                            o_proj);
+        return std::make_tuple(attn_output, past_key_value);
+    }
+
+    bool set_weight (torch::Tensor qkv, torch::Tensor o) {
+        qkv_proj = qkv;
+        o_proj = o;
+
+        return true;
+    }
+
+    int64_t layer_idx;
+    double attention_dropout;
+    int64_t hidden_size;
+    int64_t num_heads;
+    int64_t head_dim;
+    int64_t num_key_value_heads;
+    int64_t num_key_value_groups;
+    int64_t max_position_embeddings;
+    int64_t original_max_position_embeddings;
+    bool is_causal;
+
+    torch::Tensor qkv_proj;
+    torch::Tensor o_proj;
+    torch::Tensor inv_freq;
+    struct Cache_skkuter cache;
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -246,4 +364,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("__call__", &Linear::forward)
         .def("set", &Linear::set)
         .def("forward", &Linear::forward);
+    py::class_<DecoderLayer, std::shared_ptr<DecoderLayer>>(m, "DecoderLayer")
+        .def(py::init<py::object, int64_t>())
+        .def("__call__", &DecoderLayer::forward)
+        .def("forward", &DecoderLayer::forward)
+        .def("set_weight", &DecoderLayer::set_weight);
 }
