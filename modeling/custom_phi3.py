@@ -325,86 +325,86 @@ class Phi3Attention(nn.Module):
         op_size = self.num_heads * self.head_dim + 2 * (self.num_key_value_heads * self.head_dim)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
-        self.qkv_proj_ = skkuter_op.Linear()
-        self._init_rope()
+        # self.qkv_proj_ = skkuter_op.Linear()
+    #     self._init_rope()
 
-    def _init_rope(self):
-        if self.rope_scaling is None:
-            self.rotary_emb = skkuter_op.Phi3RotaryEmbedding(
-                self.head_dim,
-                self.max_position_embeddings,
-                self.rope_theta,
-            )
-        else:
-            scaling_type = self.config.rope_scaling["type"]
-            if scaling_type == "su":
-                self.rotary_emb = Phi3SuScaledRotaryEmbedding(self.head_dim, self.config)
-            elif scaling_type == "yarn":
-                self.rotary_emb = Phi3YarnScaledRotaryEmbedding(self.head_dim, self.config)
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+    # def _init_rope(self):
+    #     if self.rope_scaling is None:
+    #         self.rotary_emb = skkuter_op.Phi3RotaryEmbedding(
+    #             self.head_dim,
+    #             self.max_position_embeddings,
+    #             self.rope_theta,
+    #         )
+    #     else:
+    #         scaling_type = self.config.rope_scaling["type"]
+    #         if scaling_type == "su":
+    #             self.rotary_emb = Phi3SuScaledRotaryEmbedding(self.head_dim, self.config)
+    #         elif scaling_type == "yarn":
+    #             self.rotary_emb = Phi3YarnScaledRotaryEmbedding(self.head_dim, self.config)
+    #         else:
+    #             raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
+    # def forward(
+    #     self,
+    #     hidden_states: torch.Tensor,
+    #     attention_mask: Optional[torch.Tensor] = None,
+    #     position_ids: Optional[torch.LongTensor] = None,
+    #     past_key_value: Optional[Cache] = None,
+    #     output_attentions: bool = False,
+    #     use_cache: bool = False,
+    # ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    #     logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
         
-        # Copy from original *_proj weights
-        if self.isInit is False:
-            self.isInit = True
-            self.qkv_proj_.set(self.qkv_proj.weight.data)
+    #     # Copy from original *_proj weights
+    #     if self.isInit is False:
+    #         self.isInit = True
+    #         self.qkv_proj_.set(self.qkv_proj.weight.data)
 
-        bsz, q_len, _ = hidden_states.size()
+    #     bsz, q_len, _ = hidden_states.size()
 
-        query_states, key_states, value_states = skkuter_op.qkv_split(
-                self.qkv_proj(hidden_states), self.num_heads, self.head_dim, self.num_key_value_heads)
+    #     query_states, key_states, value_states = skkuter_op.qkv_split(
+    #             self.qkv_proj(hidden_states), self.num_heads, self.head_dim, self.num_key_value_heads)
 
-        kv_seq_len = key_states.shape[-2]
-        past_key_value_ = skkuter_op.Cache_skkuter()
-        past_key_value_.set_dynamic_cache(past_key_value)        
-        if past_key_value is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_value_.get_usable_length(kv_seq_len, self.layer_idx)
-        # for RotaryEmbedding
-        cos, sin = self.rotary_emb.forward(value_states, position_ids) #seq_len=kv_seq_len
+    #     kv_seq_len = key_states.shape[-2]
+    #     past_key_value_ = skkuter_op.Cache_skkuter()
+    #     past_key_value_.set_dynamic_cache(past_key_value)        
+    #     if past_key_value is not None:
+    #         if self.layer_idx is None:
+    #             raise ValueError(
+    #                 f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+    #                 "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+    #                 "with a layer index."
+    #             )
+    #         kv_seq_len += past_key_value_.get_usable_length(kv_seq_len, self.layer_idx)
+    #     # for RotaryEmbedding
+    #     cos, sin = self.rotary_emb.forward(value_states, position_ids) #seq_len=kv_seq_len
 
-        # FIXME: handling position_ids=None and unsqueeze_dim = 1
-        query_states, key_states = skkuter_op.apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids, 1)
+    #     # FIXME: handling position_ids=None and unsqueeze_dim = 1
+    #     query_states, key_states = skkuter_op.apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids, 1)
 
-        if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value_.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        # attention_forward
-        attn_output = skkuter_op.attention_forward(
-                                        query_states,
-                                        key_states,
-                                        value_states,
-                                        attention_mask,
-                                        self.head_dim,
-                                        bsz,
-                                        self.num_heads,
-                                        q_len,
-                                        kv_seq_len,
-                                        self.attention_dropout,
-                                        self.hidden_size,
-                                        self.num_key_value_groups, 
-                                        self.o_proj.weight.data)
+    #     if past_key_value is not None:
+    #         cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+    #         key_states, value_states = past_key_value_.update(key_states, value_states, self.layer_idx, cache_kwargs)
+    #     # attention_forward
+    #     attn_output = skkuter_op.attention_forward(
+    #                                     query_states,
+    #                                     key_states,
+    #                                     value_states,
+    #                                     attention_mask,
+    #                                     self.head_dim,
+    #                                     bsz,
+    #                                     self.num_heads,
+    #                                     q_len,
+    #                                     kv_seq_len,
+    #                                     self.attention_dropout,
+    #                                     self.hidden_size,
+    #                                     self.num_key_value_groups, 
+    #                                     self.o_proj.weight.data)
 
-        # if not output_attentions:
-        #     attn_weights = None
+    #     # if not output_attentions:
+    #     #     attn_weights = None
 
-        return attn_output, None, past_key_value
+    #     return attn_output, None, past_key_value
 
 
 class Phi3FlashAttention2(Phi3Attention):
@@ -820,7 +820,11 @@ class Phi3DecoderLayer(nn.Module):
 
         self.config = config
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
-
+        
+        # init
+        self.attn_layer_test = skkuter_op.DecoderLayer(config, layer_idx)
+        self.isInit = False
+        
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
 
@@ -859,21 +863,33 @@ class Phi3DecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
-
+        # initialize the custom decode layer
+        if self.isInit is False:
+            self.attn_layer_test.set_weight(self.self_attn.qkv_proj.weight.data, self.self_attn.o_proj.weight.data)
+            self.isInit = True
+        
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        attn_outputs, self_attn_weights, present_key_value = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
+        # attn_outputs, self_attn_weights, present_key_value = self.self_attn(
+        #     hidden_states=hidden_states,
+        #     attention_mask=attention_mask,
+        #     position_ids=position_ids,
+        #     past_key_value=past_key_value,
+        #     output_attentions=output_attentions,
+        #     use_cache=use_cache,
+        # )
+        attn_outputs, present_key_value = self.attn_layer_test(
+            hidden_states,
+            attention_mask,
+            position_ids,
+            past_key_value,
+            output_attentions,
+            use_cache,
         )
-
+        
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
 
         residual = hidden_states
@@ -883,8 +899,8 @@ class Phi3DecoderLayer(nn.Module):
 
         outputs = (hidden_states,)
 
-        if output_attentions:
-            outputs += (self_attn_weights,)
+        # if output_attentions:
+        #     outputs += (self_attn_weights,)
 
         if use_cache:
             outputs += (present_key_value,)
