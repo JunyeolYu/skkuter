@@ -314,7 +314,7 @@ class Phi3Attention(nn.Module):
         self.rope_theta = config.rope_theta
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
-        # self.isInit = False
+        self.isInit = False
         
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -325,6 +325,7 @@ class Phi3Attention(nn.Module):
         op_size = self.num_heads * self.head_dim + 2 * (self.num_key_value_heads * self.head_dim)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
+        self.qkv_proj_ = skkuter_op.Linear()
         self._init_rope()
 
     def _init_rope(self):
@@ -355,16 +356,10 @@ class Phi3Attention(nn.Module):
         logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
         
         # Copy from original *_proj weights
-        # if self.isInit is False:
-        #     self.isInit = True
-        #     my_o_proj = skkuter_op.Linear_skkuter(self.o_proj.weight.data)
-        #     del self.o_proj
-        #     my_qkv_proj = skkuter_op.Linear_skkuter(self.qkv_proj.weight.data)
-        #     del self.qkv_proj
-            
-        #     self.o_proj = my_o_proj
-        #     self.qkv_proj = my_qkv_proj
-            
+        if self.isInit is False:
+            self.isInit = True
+            self.qkv_proj_.set(self.qkv_proj.weight.data)
+
         bsz, q_len, _ = hidden_states.size()
 
         query_states, key_states, value_states = skkuter_op.qkv_split(
@@ -403,14 +398,13 @@ class Phi3Attention(nn.Module):
                                         kv_seq_len,
                                         self.attention_dropout,
                                         self.hidden_size,
-                                        self.num_key_value_groups)
+                                        self.num_key_value_groups, 
+                                        self.o_proj.weight.data)
 
-        attn_output = self.o_proj(attn_output)
+        # if not output_attentions:
+        #     attn_weights = None
 
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
+        return attn_output, None, past_key_value
 
 
 class Phi3FlashAttention2(Phi3Attention):

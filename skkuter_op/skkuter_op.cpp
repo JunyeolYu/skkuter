@@ -19,7 +19,8 @@ torch::Tensor attention_forward(
     int64_t kv_seq_len,
     double attention_dropout,
     int64_t hidden_size,
-    int64_t num_key_value_groups) {
+    int64_t num_key_value_groups,
+    torch::Tensor o_proj) {
     
     // repeat k/v heads if n_kv_heads < n_heads
     key_states = repeat_kv(key_states, num_key_value_groups);
@@ -79,7 +80,7 @@ torch::Tensor attention_forward(
     attn_output = attn_output.transpose(1, 2);//.contiguous();
     attn_output = attn_output.reshape({bsz, q_len, hidden_size});
 
-    return attn_output;
+    return torch::matmul(attn_output, o_proj.t());
 }
 
 torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep) {
@@ -171,20 +172,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> qkv_split(
     return std::make_tuple(query_states, key_states, value_states);
 }
 
-struct Linear_skkuter : torch::nn::Module {
-    Linear_skkuter(torch::Tensor weight) {
-        linear = torch::nn::Linear(torch::nn::LinearOptions(weight.size(0), weight.size(1)).bias(false));
-        register_module("linear", linear);
-        linear->weight = weight.clone(); 
-    }
-
-    torch::Tensor forward(torch::Tensor x) {
-        return linear->forward(x);
-    }
-
-    torch::nn::Linear linear{nullptr};
-};
-
 struct Dropout_skkuter : torch::nn::Module {
     Dropout_skkuter(double prob) {
         dropout = torch::nn::Dropout(torch::nn::DropoutOptions().p(prob));
@@ -224,6 +211,17 @@ struct Cache_skkuter {
     }
 };
 
+struct Linear {
+    torch::Tensor linear;
+    // store object
+    void set(torch::Tensor x) {
+        linear = x;
+    }
+
+    torch::Tensor forward(torch::Tensor input) {
+        return torch::matmul(input, linear.t());
+    }
+};
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
@@ -234,10 +232,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
-    py::class_<Linear_skkuter, torch::nn::Module, std::shared_ptr<Linear_skkuter>>(m, "Linear_skkuter")
-        .def(py::init<torch::Tensor>())
-        .def("__call__", &Linear_skkuter::forward)
-        .def("forward", &Linear_skkuter::forward);
     py::class_<Dropout_skkuter, torch::nn::Module, std::shared_ptr<Dropout_skkuter>>(m, "Dropout_skkuter")
         .def(py::init<double>())
         .def("__call__", &Dropout_skkuter::forward)
@@ -247,4 +241,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("set_dynamic_cache", &Cache_skkuter::set_dynamic_cache)
         .def("get_usable_length", &Cache_skkuter::get_usable_length)
         .def("update", &Cache_skkuter::update);
+    py::class_<Linear, std::shared_ptr<Linear>>(m, "Linear")
+        .def(py::init<>())
+        .def("__call__", &Linear::forward)
+        .def("set", &Linear::set)
+        .def("forward", &Linear::forward);
 }
