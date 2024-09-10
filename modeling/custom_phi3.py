@@ -822,14 +822,11 @@ class Phi3DecoderLayer(nn.Module):
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
         
         # init
-        self.attn_layer_test = skkuter_op.DecoderLayer(config, layer_idx)
+        self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
         self.isInit = False
         
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
-
-        self.resid_attn_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
-        self.resid_mlp_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -865,23 +862,17 @@ class Phi3DecoderLayer(nn.Module):
         """
         # initialize the custom decode layer
         if self.isInit is False:
-            self.attn_layer_test.set_weight(self.self_attn.qkv_proj.weight.data, self.self_attn.o_proj.weight.data)
+            self.skkuter_decoder.set_weight(
+                self.self_attn.qkv_proj.weight.data,
+                self.self_attn.o_proj.weight.data,
+                self.input_layernorm.weight.data,
+                self.post_attention_layernorm.weight.data,
+                self.mlp.gate_up_proj.weight.data,
+                self.mlp.down_proj.weight.data)
+                
             self.isInit = True
         
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
-
-        # Self Attention
-        # attn_outputs, self_attn_weights, present_key_value = self.self_attn(
-        #     hidden_states=hidden_states,
-        #     attention_mask=attention_mask,
-        #     position_ids=position_ids,
-        #     past_key_value=past_key_value,
-        #     output_attentions=output_attentions,
-        #     use_cache=use_cache,
-        # )
-        attn_outputs = self.attn_layer_test(
+        outputs = self.skkuter_decoder(
             hidden_states,
             attention_mask,
             position_ids,
@@ -889,13 +880,6 @@ class Phi3DecoderLayer(nn.Module):
             output_attentions,
             # use_cache, # always True
         )
-        
-        hidden_states = residual + self.resid_attn_dropout(attn_outputs)
-
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
         outputs = (hidden_states,)
 

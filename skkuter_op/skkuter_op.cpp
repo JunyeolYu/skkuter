@@ -236,14 +236,19 @@ struct DecoderLayer {
         num_key_value_groups = num_heads / num_key_value_heads;
         max_position_embeddings = config.attr("max_position_embeddings").cast<int64_t>();
         original_max_position_embeddings = config.attr("original_max_position_embeddings").cast<int64_t>();
+        rms_norm_eps = config.attr("rms_norm_eps").cast<double>();
         is_causal = true;
+        resid_pdrop = config.attr("resid_pdrop").cast<double>();
 
         // init rope
         auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
         inv_freq = 1.0 / (torch::pow(config.attr("rope_theta").cast<double>(), torch::arange(0, head_dim, 2, options) / head_dim));
     }
 
-    torch::Tensor forward(torch::Tensor hidden_states, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions/*, bool use_cache*/) {
+    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions/*, bool use_cache*/) {
+        // input_layernorm
+        auto hidden_states = input_layernorm * RMSnorm_forward(x, rms_norm_eps);
+        
         // qkv_split
         auto qkv = torch::matmul(hidden_states, qkv_proj.t());
         auto bsz = qkv.size(0);
@@ -304,13 +309,34 @@ struct DecoderLayer {
         attn_output = attn_output.reshape({bsz, q_len, hidden_size});
         attn_output = torch::matmul(attn_output, o_proj.t());
 
-        // only attention output
-        return attn_output;
+        // post_attention_layernorm
+        auto residual = x + torch::nn::functional::dropout(attn_output, torch::nn::functional::DropoutFuncOptions().p(resid_pdrop));
+
+        // post_attention_layernorm
+        hidden_states = post_attention_layernorm * RMSnorm_forward(residual, rms_norm_eps);
+
+        // mlp
+        // gate_up_proj
+        auto up_states = torch::matmul(hidden_states, gate_up_proj.t());
+        std::vector<torch::Tensor> chunks = up_states.chunk(2, -1);
+        up_states = chunks[1];
+        up_states = up_states * torch::silu(chunks[0]);
+        // down_proj
+        hidden_states = torch::matmul(up_states, down_proj.t());
+
+        // resid_mlp_dropout
+        auto output = residual + torch::nn::functional::dropout(hidden_states, torch::nn::functional::DropoutFuncOptions().p(resid_pdrop));
+
+        return output;
     }
 
-    bool set_weight (torch::Tensor qkv, torch::Tensor o) {
+    bool set_weight (torch::Tensor qkv, torch::Tensor o, torch::Tensor input_norm, torch::Tensor post_norm, torch::Tensor up, torch::Tensor down) {
         qkv_proj = qkv;
         o_proj = o;
+        input_layernorm = input_norm;
+        post_attention_layernorm = post_norm;
+        gate_up_proj = up;
+        down_proj = down;
 
         return true;
     }
@@ -324,11 +350,17 @@ struct DecoderLayer {
     int64_t num_key_value_groups;
     int64_t max_position_embeddings;
     int64_t original_max_position_embeddings;
+    double rms_norm_eps;
+    double resid_pdrop;
     bool is_causal;
 
     torch::Tensor qkv_proj;
     torch::Tensor o_proj;
     torch::Tensor inv_freq;
+    torch::Tensor input_layernorm;
+    torch::Tensor post_attention_layernorm;
+    torch::Tensor gate_up_proj;
+    torch::Tensor down_proj;
     struct Cache_skkuter cache;
 };
 
