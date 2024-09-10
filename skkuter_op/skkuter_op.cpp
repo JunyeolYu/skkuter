@@ -243,7 +243,7 @@ struct DecoderLayer {
         inv_freq = 1.0 / (torch::pow(config.attr("rope_theta").cast<double>(), torch::arange(0, head_dim, 2, options) / head_dim));
     }
 
-    std::tuple<torch::Tensor, py::object> forward(torch::Tensor hidden_states, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions, bool use_cache ) {
+    torch::Tensor forward(torch::Tensor hidden_states, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions/*, bool use_cache*/) {
         // qkv_split
         auto qkv = torch::matmul(hidden_states, qkv_proj.t());
         auto bsz = qkv.size(0);
@@ -257,7 +257,8 @@ struct DecoderLayer {
         key_states = key_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
         value_states = value_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
 
-        // cache
+        // cache 
+        // Assume: `cache` is not always None and `layer_id` is given
         auto kv_seq_len = key_states.size(-2);
         cache.set_dynamic_cache(past_key_value);
         kv_seq_len += cache.get_usable_length(kv_seq_len, layer_idx);
@@ -275,46 +276,36 @@ struct DecoderLayer {
         sin = sin.to(value_states.dtype());
 
         // apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids, unsqueeze_dim = 1);
+        // FIXME: handling position_ids=None and unsqueeze_dim = 1
         auto cos_ = cos.unsqueeze(1); //unsqueeze_dim
         auto sin_ = sin.unsqueeze(1);
         query_states = (query_states * cos_) + (rotate_half(query_states) * sin_);
         key_states = (key_states * cos_) + (rotate_half(key_states) * sin_);
 
         // cache update
+        // Assume: `cache` is not always None
         py::dict cache_kwargs;
         cache_kwargs["sin"] = sin;
         cache_kwargs["cos"] = cos;
         std::tuple res2 = cache.update(key_states, value_states, layer_idx, cache_kwargs);
 
-        // forward
-        // auto key = std::get<0>(res2);
-        // auto value = std::get<1>(res2);
+        // attnetion forward
+        // repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(std::get<0>(res2), num_key_value_groups);
+        value_states = repeat_kv(std::get<1>(res2), num_key_value_groups);
 
-        // // Attnetion
-        // auto attn_weights = torch::matmul(query_states, key.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
-        // attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value.scalar_type());
-        // attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout));
+        auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
+        attn_weights = attn_weights + attention_mask;
+        attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
+        attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout));
 
-        // auto attn_output = torch::matmul(attn_weights, value);
-        // attn_output = attn_output.transpose(1, 2);//.contiguous();
-        // attn_output = attn_output.reshape({bsz, q_len, hidden_size});
-        // attn_output = torch::matmul(attn_output, o_proj.t());
+        auto attn_output = torch::matmul(attn_weights, value_states);
+        attn_output = attn_output.transpose(1, 2);//.contiguous();
+        attn_output = attn_output.reshape({bsz, q_len, hidden_size});
+        attn_output = torch::matmul(attn_output, o_proj.t());
 
-        auto attn_output = attention_forward(
-                            query_states,
-                            std::get<0>(res2),
-                            std::get<1>(res2),
-                            attention_mask,
-                            head_dim,
-                            bsz,
-                            num_heads,
-                            q_len,
-                            kv_seq_len,
-                            attention_dropout,
-                            hidden_size,
-                            num_key_value_groups, 
-                            o_proj);
-        return std::make_tuple(attn_output, past_key_value);
+        // only attention output
+        return attn_output;
     }
 
     bool set_weight (torch::Tensor qkv, torch::Tensor o) {

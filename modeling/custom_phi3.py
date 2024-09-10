@@ -881,13 +881,13 @@ class Phi3DecoderLayer(nn.Module):
         #     output_attentions=output_attentions,
         #     use_cache=use_cache,
         # )
-        attn_outputs, present_key_value = self.attn_layer_test(
+        attn_outputs = self.attn_layer_test(
             hidden_states,
             attention_mask,
             position_ids,
             past_key_value,
             output_attentions,
-            use_cache,
+            # use_cache, # always True
         )
         
         hidden_states = residual + self.resid_attn_dropout(attn_outputs)
@@ -903,7 +903,7 @@ class Phi3DecoderLayer(nn.Module):
         #     outputs += (self_attn_weights,)
 
         if use_cache:
-            outputs += (present_key_value,)
+            outputs += (past_key_value,)
 
         return outputs
 
