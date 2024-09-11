@@ -319,10 +319,9 @@ struct DecoderLayer {
         // gate_up_proj
         auto up_states = torch::matmul(hidden_states, gate_up_proj.t());
         std::vector<torch::Tensor> chunks = up_states.chunk(2, -1);
-        up_states = chunks[1];
-        up_states = up_states * torch::silu(chunks[0]);
+
         // down_proj
-        hidden_states = torch::matmul(up_states, down_proj.t());
+        hidden_states = torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
 
         // resid_mlp_dropout
         auto output = residual + torch::nn::functional::dropout(hidden_states, torch::nn::functional::DropoutFuncOptions().p(resid_pdrop));
@@ -364,6 +363,17 @@ struct DecoderLayer {
     struct Cache_skkuter cache;
 };
 
+struct Embedding {
+    torch::Tensor emb;
+    // store weight
+    void set_weight(torch::Tensor x) {
+        emb = x;
+    }
+    torch::Tensor forward(torch::Tensor x) {
+        return torch::embedding(emb, x);
+    }
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -392,4 +402,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("__call__", &DecoderLayer::forward)
         .def("forward", &DecoderLayer::forward)
         .def("set_weight", &DecoderLayer::set_weight);
+     py::class_<Embedding, std::shared_ptr<Embedding>>(m, "Embedding")
+        .def(py::init<>())
+        .def("__call__", &Embedding::forward)
+        .def("set_weight", &Embedding::set_weight)
+        .def("forward", &Embedding::forward);
 }

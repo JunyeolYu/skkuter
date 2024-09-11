@@ -1024,6 +1024,7 @@ class Phi3Model(Phi3PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_skkuter = skkuter_op.Embedding()
         self.embed_dropout = skkuter_op.Dropout_skkuter(config.embd_pdrop)
         self.layers = nn.ModuleList(
             [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -1034,6 +1035,7 @@ class Phi3Model(Phi3PreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
+        self.isInit = False
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -1041,7 +1043,7 @@ class Phi3Model(Phi3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
+    # @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1054,6 +1056,10 @@ class Phi3Model(Phi3PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        if self.isInit is False:
+            self.isInit = True
+            self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
+        
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1097,7 +1103,7 @@ class Phi3Model(Phi3PreTrainedModel):
             position_ids = position_ids.view(-1, seq_length).long()
 
         if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+            inputs_embeds = self.embed_skkuter(input_ids)
 
         if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
             is_padding_right = attention_mask[:, -1].sum().item() != batch_size
