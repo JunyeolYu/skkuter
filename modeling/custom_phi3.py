@@ -872,16 +872,14 @@ class Phi3DecoderLayer(nn.Module):
                 
             self.isInit = True
         
-        outputs = self.skkuter_decoder(
+        outputs = (self.skkuter_decoder(
             hidden_states,
             attention_mask,
             position_ids,
             past_key_value,
             output_attentions,
             # use_cache, # always True
-        )
-
-        outputs = (hidden_states,)
+        ),)
 
         # if output_attentions:
         #     outputs += (self_attn_weights,)
