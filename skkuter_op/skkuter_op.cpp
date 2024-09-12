@@ -374,6 +374,17 @@ struct Embedding {
     }
 };
 
+struct lm_head {
+    torch::Tensor lm_head;
+    void set_weight(torch::Tensor x) {
+        lm_head = x;
+    }
+
+    torch::Tensor forward(torch::Tensor x) {
+        return torch::matmul(x, lm_head.t()).to(torch::kFloat);
+    }
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -402,9 +413,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("__call__", &DecoderLayer::forward)
         .def("forward", &DecoderLayer::forward)
         .def("set_weight", &DecoderLayer::set_weight);
-     py::class_<Embedding, std::shared_ptr<Embedding>>(m, "Embedding")
+    py::class_<Embedding, std::shared_ptr<Embedding>>(m, "Embedding")
         .def(py::init<>())
         .def("__call__", &Embedding::forward)
         .def("set_weight", &Embedding::set_weight)
         .def("forward", &Embedding::forward);
+    py::class_<lm_head, std::shared_ptr<lm_head>>(m, "lm_head")
+        .def(py::init<>())
+        .def("__call__", &lm_head::forward)
+        .def("set_weight", &lm_head::set_weight)
+        .def("forward", &lm_head::forward);
 }
