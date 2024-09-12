@@ -822,11 +822,14 @@ class Phi3DecoderLayer(nn.Module):
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
         
         # init
-        self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
+        self.attn_layer_test = skkuter_op.DecoderLayer(config, layer_idx)
         self.isInit = False
         
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
+
+        self.resid_attn_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
+        self.resid_mlp_dropout = skkuter_op.Dropout_skkuter(config.resid_pdrop)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
@@ -862,24 +865,39 @@ class Phi3DecoderLayer(nn.Module):
         """
         # initialize the custom decode layer
         if self.isInit is False:
-            self.skkuter_decoder.set_weight(
-                self.self_attn.qkv_proj.weight.data,
-                self.self_attn.o_proj.weight.data,
-                self.input_layernorm.weight.data,
-                self.post_attention_layernorm.weight.data,
-                self.mlp.gate_up_proj.weight.data,
-                self.mlp.down_proj.weight.data)
-                
+            self.attn_layer_test.set_weight(self.self_attn.qkv_proj.weight.data, self.self_attn.o_proj.weight.data)
             self.isInit = True
         
-        outputs = (self.skkuter_decoder(
+        residual = hidden_states
+
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # Self Attention
+        # attn_outputs, self_attn_weights, present_key_value = self.self_attn(
+        #     hidden_states=hidden_states,
+        #     attention_mask=attention_mask,
+        #     position_ids=position_ids,
+        #     past_key_value=past_key_value,
+        #     output_attentions=output_attentions,
+        #     use_cache=use_cache,
+        # )
+        attn_outputs = self.attn_layer_test(
             hidden_states,
             attention_mask,
             position_ids,
             past_key_value,
             output_attentions,
             # use_cache, # always True
-        ),)
+        )
+        
+        hidden_states = residual + self.resid_attn_dropout(attn_outputs)
+
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + self.resid_mlp_dropout(hidden_states)
+
+        outputs = (hidden_states,)
 
         # if output_attentions:
         #     outputs += (self_attn_weights,)
@@ -1024,7 +1042,6 @@ class Phi3Model(Phi3PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.embed_skkuter = skkuter_op.Embedding()
         self.embed_dropout = skkuter_op.Dropout_skkuter(config.embd_pdrop)
         self.layers = nn.ModuleList(
             [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -1035,7 +1052,6 @@ class Phi3Model(Phi3PreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
-        self.isInit = False
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -1043,7 +1059,7 @@ class Phi3Model(Phi3PreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    # @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
+    @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1056,10 +1072,6 @@ class Phi3Model(Phi3PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        if self.isInit is False:
-            self.isInit = True
-            self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
-        
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1103,7 +1115,7 @@ class Phi3Model(Phi3PreTrainedModel):
             position_ids = position_ids.view(-1, seq_length).long()
 
         if inputs_embeds is None:
-            inputs_embeds = self.embed_skkuter(input_ids)
+            inputs_embeds = self.embed_tokens(input_ids)
 
         if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
             is_padding_right = attention_mask[:, -1].sum().item() != batch_size
@@ -1173,6 +1185,18 @@ class Phi3Model(Phi3PreTrainedModel):
             attentions=all_self_attns,
         )
 
+class Linear(torch.nn.Module):
+    def __init__(self, in_features, out_features):
+        super(Linear, self).__init__()
+        self.linear = skkuter_op.Linear(in_features, out_features, False)
+
+    def forward(self, input):
+        return self.linear(input)
+    
+    @property
+    def weight(self):
+        # C++ 모듈의 가중치를 반환하는 코드
+        return self.linear.get_weight()  # C++ 측에서 구현 필요
 
 class Phi3ForCausalLM(Phi3PreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
@@ -1182,11 +1206,13 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
         super().__init__(config)
         self.model = Phi3Model(config)
         self.vocab_size = config.vocab_size
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
+        # self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        # self.lm_head = Linear(config.hidden_size, config.vocab_size)
+        self.lm_head = skkuter_op.MyModule(config.hidden_size, config.vocab_size, False)
         # Initialize weights and apply final processing
         self.post_init()
-
+        # self.register_module("lm_head", self.lm_head)
+        print(self.lm_head.state())
     # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_input_embeddings
     def get_input_embeddings(self):
         return self.model.embed_tokens
