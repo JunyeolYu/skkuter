@@ -226,7 +226,7 @@ struct Linear {
 
 struct DecoderLayer {
     DecoderLayer(py::object config, int64_t layer) {
-        cache = Cache_skkuter();
+        // cache = Cache_skkuter();
         layer_idx = layer;
         // Init 
         attention_dropout = config.attr("attention_dropout").cast<double>();
@@ -267,9 +267,10 @@ struct DecoderLayer {
 
         // cache 
         // Assume: `cache` is not always None and `layer_id` is given
-        auto kv_seq_len = key_states.size(-2);
-        cache.set_dynamic_cache(past_key_value);
-        kv_seq_len += cache.get_usable_length(kv_seq_len, layer_idx);
+        // kv_seq_len is used for dimension checking
+        // auto kv_seq_len = key_states.size(-2);
+        // cache.set_dynamic_cache(past_key_value);
+        // kv_seq_len += cache.get_usable_length(kv_seq_len, layer_idx); 
 
         // rotary_embed
         auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).to(torch::kFloat32).expand({position_ids.size(0), -1, 1});
@@ -295,12 +296,12 @@ struct DecoderLayer {
         py::dict cache_kwargs;
         cache_kwargs["sin"] = sin;
         cache_kwargs["cos"] = cos;
-        std::tuple res2 = cache.update(key_states, value_states, layer_idx, cache_kwargs);
+        py::tuple kv_res = past_key_value.attr("update")(key_states, value_states, layer_idx, cache_kwargs);
 
         // attnetion forward
         // repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(std::get<0>(res2), num_key_value_groups);
-        value_states = repeat_kv(std::get<1>(res2), num_key_value_groups);
+        key_states = repeat_kv(kv_res[0].cast<torch::Tensor>(), num_key_value_groups);
+        value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
 
         auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
         attn_weights = attn_weights + attention_mask;
@@ -363,7 +364,7 @@ struct DecoderLayer {
     torch::Tensor post_attention_layernorm;
     torch::Tensor gate_up_proj;
     torch::Tensor down_proj;
-    struct Cache_skkuter cache;
+    // struct Cache_skkuter cache;
 };
 
 struct Embedding {
