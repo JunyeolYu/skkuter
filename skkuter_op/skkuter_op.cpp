@@ -148,6 +148,7 @@ private:
 };
 
 torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
+    torch::NoGradGuard no_grad;
     auto input_dtype = hidden_states.scalar_type();
     hidden_states = hidden_states.to(torch::kFloat32);
     auto variance = hidden_states.pow(2).mean(-1, true);
@@ -245,7 +246,9 @@ struct DecoderLayer {
         inv_freq = 1.0 / (torch::pow(config.attr("rope_theta").cast<double>(), torch::arange(0, head_dim, 2, options) / head_dim));
     }
 
-    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions/*, bool use_cache*/) {
+    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions) {
+        torch::NoGradGuard no_grad;
+
         // input_layernorm
         auto hidden_states = input_layernorm * RMSnorm_forward(x, rms_norm_eps);
         
@@ -370,6 +373,7 @@ struct Embedding {
         emb = x;
     }
     torch::Tensor forward(torch::Tensor x) {
+        torch::NoGradGuard no_grad;
         return torch::embedding(emb, x);
     }
 };
@@ -381,6 +385,7 @@ struct lm_head {
     }
 
     torch::Tensor forward(torch::Tensor x) {
+        torch::NoGradGuard no_grad;
         return torch::matmul(x, lm_head.t()).to(torch::kFloat);
     }
 };
