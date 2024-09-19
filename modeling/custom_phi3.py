@@ -314,7 +314,6 @@ class Phi3Attention(nn.Module):
         self.rope_theta = config.rope_theta
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
-        self.isInit = False
         
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -823,12 +822,21 @@ class Phi3DecoderLayer(nn.Module):
         
         # init
         self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
-        self.isInit = False
         
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
+    def _weight_copy(self):
+        # initialize the custom decode layer
+        self.skkuter_decoder.set_weight(
+                self.self_attn.qkv_proj.weight.data,
+                self.self_attn.o_proj.weight.data,
+                self.input_layernorm.weight.data,
+                self.post_attention_layernorm.weight.data,
+                self.mlp.gate_up_proj.weight.data,
+                self.mlp.down_proj.weight.data)
+    
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -860,17 +868,6 @@ class Phi3DecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
-        # initialize the custom decode layer
-        if self.isInit is False:
-            self.skkuter_decoder.set_weight(
-                self.self_attn.qkv_proj.weight.data,
-                self.self_attn.o_proj.weight.data,
-                self.input_layernorm.weight.data,
-                self.post_attention_layernorm.weight.data,
-                self.mlp.gate_up_proj.weight.data,
-                self.mlp.down_proj.weight.data)
-                
-            self.isInit = True
         
         outputs = (self.skkuter_decoder(
             hidden_states,
@@ -1035,13 +1032,17 @@ class Phi3Model(Phi3PreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
-        self.isInit = False
 
     def get_input_embeddings(self):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+
+    def _weight_copy(self):
+        self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
+        for decoder_layer in self.layers:
+            decoder_layer._weight_copy()
 
     # @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     def forward(
@@ -1056,9 +1057,6 @@ class Phi3Model(Phi3PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        if self.isInit is False:
-            self.isInit = True
-            self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
         
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1186,7 +1184,7 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
         self.lm_head_skkuter = skkuter_op.lm_head()
         # Initialize weights and apply final processing
         self.post_init()
-        self.isInit = False
+        
     # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_input_embeddings
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -1210,6 +1208,12 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
     # Copied from transformers.models.llama.modeling_llama.LlamaForCausalLM.get_decoder
     def get_decoder(self):
         return self.model
+
+    def weight_copy(self):
+        # This method is REQUIRED to be executed before inference;
+        # skipping this step will result in improper model initialization and potentially incorrect or undefined behavior during inference
+        self.lm_head_skkuter.set_weight(self.lm_head.weight.data)
+        self.model._weight_copy()
 
     # Ignore copy
     @torch.inference_mode()
@@ -1252,10 +1256,7 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
         >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         'This is an example script .\n Certainly! Below is a sample script that demonstrates a simple task, such as calculating the sum'
-        ```"""
-        if self.isInit is False:
-            self.isInit = True
-            self.lm_head_skkuter.set_weight(self.lm_head.weight.data)
+        ```"""            
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
