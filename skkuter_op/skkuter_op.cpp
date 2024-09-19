@@ -265,13 +265,6 @@ struct DecoderLayer {
         key_states = key_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
         value_states = value_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
 
-        // cache 
-        // Assume: `cache` is not always None and `layer_id` is given
-        // kv_seq_len is used for dimension checking
-        // auto kv_seq_len = key_states.size(-2);
-        // cache.set_dynamic_cache(past_key_value);
-        // kv_seq_len += cache.get_usable_length(kv_seq_len, layer_idx); 
-
         // rotary_embed
         auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).to(torch::kFloat32).expand({position_ids.size(0), -1, 1});
         auto position_ids_expanded = position_ids.unsqueeze(1).to(torch::kFloat32);
