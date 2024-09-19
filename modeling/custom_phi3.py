@@ -757,54 +757,54 @@ class Phi3DecoderLayer(nn.Module):
                 self.mlp.gate_up_proj.weight.data,
                 self.mlp.down_proj.weight.data)
     
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        if "padding_mask" in kwargs:
-            warnings.warn(
-                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-            )
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`):
-                input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
-                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
-            position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
-                Indices of positions of each input sequence tokens in the position embeddings. Selected in the range
-                `[0, config.n_positions - 1]`. [What are position IDs?](../glossary#position-ids)
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
-        """
+    # def forward(
+    #     self,
+    #     hidden_states: torch.Tensor,
+    #     attention_mask: Optional[torch.Tensor] = None,
+    #     position_ids: Optional[torch.LongTensor] = None,
+    #     past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    #     output_attentions: Optional[bool] = False,
+    #     use_cache: Optional[bool] = False,
+    #     **kwargs,
+    # ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    #     if "padding_mask" in kwargs:
+    #         warnings.warn(
+    #             "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+    #         )
+    #     """
+    #     Args:
+    #         hidden_states (`torch.FloatTensor`):
+    #             input to the layer of shape `(batch, seq_len, embed_dim)`
+    #         attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
+    #             `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+    #         position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
+    #             Indices of positions of each input sequence tokens in the position embeddings. Selected in the range
+    #             `[0, config.n_positions - 1]`. [What are position IDs?](../glossary#position-ids)
+    #         output_attentions (`bool`, *optional*):
+    #             Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+    #             returned tensors for more detail.
+    #         use_cache (`bool`, *optional*):
+    #             If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+    #             (see `past_key_values`).
+    #         past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+    #     """
         
-        outputs = (self.skkuter_decoder(
-            hidden_states,
-            attention_mask,
-            position_ids,
-            past_key_value,
-            output_attentions,
-            # use_cache, # always True
-        ),)
+    #     outputs = (self.skkuter_decoder(
+    #         hidden_states,
+    #         attention_mask,
+    #         position_ids,
+    #         past_key_value,
+    #         output_attentions,
+    #         # use_cache, # always True
+    #     ),)
 
-        # if output_attentions:
-        #     outputs += (self_attn_weights,)
+    #     # if output_attentions:
+    #     #     outputs += (self_attn_weights,)
 
-        if use_cache:
-            outputs += (past_key_value,)
+    #     if use_cache:
+    #         outputs += (past_key_value,)
 
-        return outputs
+    #     return outputs
 
 
 PHI3_START_DOCSTRING = r"""
@@ -1056,23 +1056,21 @@ class Phi3Model(Phi3PreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            layer_outputs = decoder_layer(
+            hidden_states = decoder_layer.skkuter_decoder(
                 hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                output_attentions,
+                # use_cache=use_cache,
             )
 
-            hidden_states = layer_outputs[0]
+            # if output_attentions:
+            #     all_self_attns += (layer_outputs[1],)
 
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
+        if use_cache:
+            next_decoder_cache = past_key_values
+        
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
