@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
 
 torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep);
 
@@ -444,12 +445,129 @@ struct Model {
     torch::Tensor norm;
 };
 
+float finfo(torch::Dtype dtype) {
+    if (dtype == torch::kFloat32) {
+        return std::numeric_limits<float>::lowest();
+    } else if (dtype == torch::kFloat64) {
+        return std::numeric_limits<double>::lowest();
+    } else if (dtype == torch::kFloat16) {
+        return -65504.0f; // Half-precision floating point
+    } else if (dtype == torch::kBFloat16) {
+        return -3.38953139e+38f; // BFloat16
+    } else if (dtype == torch::kInt32 || dtype == torch::kInt64 || dtype == torch::kInt16) {
+        return std::numeric_limits<int>::lowest();
+    } else {
+        // For unsupported types, return the most negative possible float
+        return std::numeric_limits<float>::lowest();
+    }
+}
+
+torch::Tensor _make_causal_mask(
+    int batch_size,
+    int query_length,
+    int key_value_length,
+    torch::Dtype dtype,
+    torch::Device device,
+    int past_key_values_length,
+    int sliding_window = -1
+) {
+    float min_value = finfo(dtype);
+    auto mask = torch::full({query_length, query_length}, min_value, torch::TensorOptions().dtype(dtype).device(device));
+    auto mask_cond = torch::arange(mask.size(-1), torch::TensorOptions().device(device));
+    //mask.masked_fill_(mask_cond.unsqueeze(0) < mask_cond.unsqueeze(1), 0);
+    mask.masked_fill_(mask_cond < (mask_cond + 1).reshape({mask.sizes()[mask.dim() - 1], 1}), 0);
+    
+    if (past_key_values_length > 0) {
+        auto past_mask = torch::zeros({query_length, past_key_values_length}, torch::TensorOptions().dtype(dtype).device(device));
+        mask = torch::cat({past_mask, mask}, -1);
+    }
+
+    if (sliding_window > 0) {
+        auto diagonal = past_key_values_length - sliding_window + 1;
+        auto context_mask = 1 - torch::triu(torch::ones_like(mask), diagonal);
+        mask.masked_fill_(context_mask.to(torch::kBool), min_value);
+    }
+
+    return mask.unsqueeze(0).unsqueeze(0).expand({batch_size, 1, query_length, key_value_length});
+}
+
+torch::Tensor _expand_mask(torch::Tensor mask, torch::Dtype dtype, int64_t tgt_len = -1) {
+    auto bsz = mask.size(0);
+    auto src_len = mask.size(1);
+
+    if (tgt_len == -1) tgt_len = src_len;
+
+    auto expanded_mask = mask.unsqueeze(1).unsqueeze(2).expand({bsz, 1, tgt_len, src_len}).to(dtype);
+
+    auto inverted_mask = 1.0 - expanded_mask;
+    float min_value = finfo(dtype);
+    return inverted_mask.masked_fill(inverted_mask.to(torch::kBool), min_value);
+}
+
+torch::Tensor to_4d(torch::Tensor attention_mask_2d, int64_t query_length, int key_value_length, torch::Dtype dtype, int sliding_window) {
+    auto past_key_values_length = key_value_length - query_length;
+
+    torch::Tensor causal_4d_mask;
+    if (query_length > 1 && true) {
+        causal_4d_mask = _make_causal_mask(
+            attention_mask_2d.size(0),
+            query_length,
+            key_value_length,
+            dtype,
+            attention_mask_2d.device(),
+            past_key_values_length,
+            sliding_window
+        );
+    }
+
+    auto expanded_attn_mask = _expand_mask(attention_mask_2d, dtype, query_length);
+    if (causal_4d_mask.defined()) {
+        return expanded_attn_mask + causal_4d_mask;
+    }
+    return expanded_attn_mask;
+}
+
+// Reference: https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py#L298
+// Convert `_prepare_4d_causal_attention_mask` by torch c++ binding
+torch::Tensor _prepare_4d_causal_attention_mask(
+    torch::Tensor attention_mask,
+    int64_t bsz,
+    int64_t seq_length,
+    torch::Tensor inputs_embeds,
+    int64_t past_key_values_length,
+    int64_t sliding_window = -1) {
+    
+    auto key_value_length = seq_length + past_key_values_length;
+    
+    // 4d mask is passed through the layers
+    if (attention_mask.defined() && attention_mask.dim() == 2) {
+        // to_4d
+        attention_mask = to_4d(
+        attention_mask, seq_length, key_value_length, inputs_embeds.scalar_type(), sliding_window);
+    } else if (attention_mask.defined() && attention_mask.dim() == 4) {
+        std::vector<int64_t> expected_shape = {bsz, 1, seq_length, key_value_length};
+        if (attention_mask.sizes() != torch::IntArrayRef(expected_shape)) {
+            throw std::invalid_argument("Incorrect 4D attention_mask shape");
+        } else {
+            auto inverted_mask = 1.0 - attention_mask;
+            attention_mask = inverted_mask.masked_fill(
+                inverted_mask.to(torch::kBool), finfo(inputs_embeds.scalar_type())
+            );
+        }
+    } else {
+        // TODO: implement `to_causal_4d` (if needed)
+    }
+
+    return attention_mask;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
     m.def("RMSnorm_forward", &RMSnorm_forward, "RMSnorm_forward");
     m.def("qkv_split", &qkv_split, "qkv_split");
+    m.def("_prepare_4d_causal_attention_mask", &_prepare_4d_causal_attention_mask, "_prepare_4d_causal_attention_mask");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);

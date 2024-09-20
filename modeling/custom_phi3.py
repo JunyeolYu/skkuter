@@ -1041,13 +1041,13 @@ class Phi3Model(Phi3PreTrainedModel):
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
         else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
+            attention_mask = skkuter_op._prepare_4d_causal_attention_mask(
                 attention_mask,
-                (batch_size, seq_length),
+                batch_size,
+                seq_length,
                 inputs_embeds,
                 past_key_values_length,
-                sliding_window=self.config.sliding_window,
+                self.config.sliding_window,
             )
 
         hidden_states = inputs_embeds
