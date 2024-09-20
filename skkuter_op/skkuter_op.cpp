@@ -384,6 +384,66 @@ struct lm_head {
     }
 };
 
+struct Model {
+    Model(py::object config) {
+        padding_idx = config.attr("pad_token_id").cast<int64_t>();
+        vocab_size = config.attr("vocab_size").cast<int64_t>();
+        num_hidden_layers = config.attr("num_hidden_layers").cast<int64_t>();
+        eps = config.attr("rms_norm_eps").cast<double>();
+
+        for (int i = 0; i < num_hidden_layers; i++) {
+            layers.emplace_back(config, i);
+        }
+    }
+
+    bool weight_copy(torch::Tensor x) {
+        norm = x;
+        return true;
+    }
+
+    bool decoder_weight_copy(const py::tuple& t, int64_t layer_idx) {
+        // set_weight()
+        if (t.size() != 6) {
+            throw std::runtime_error("Expected 6 tensors");
+            return false;
+        }
+
+        layers[layer_idx].set_weight(t[0].cast<torch::Tensor>(), t[1].cast<torch::Tensor>(), t[2].cast<torch::Tensor>(), t[3].cast<torch::Tensor>(), t[4].cast<torch::Tensor>(), t[5].cast<torch::Tensor>());
+        return true;
+    }
+
+    std::tuple<torch::Tensor, py::tuple> forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_values, bool output_attentions, bool output_hidden_states) {
+        auto all_hidden_states = py::make_tuple();
+        for (auto& layer : layers) {
+            if (output_hidden_states) {
+                all_hidden_states += py::make_tuple(x);
+            }
+            x = layer.forward(
+                x,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                output_attentions);
+        }
+
+        // Normalization
+        x = norm * RMSnorm_forward(x, eps);
+
+        return std::make_tuple(x, all_hidden_states);
+
+        // FIXME: 구현 필요
+        // if output_attentions: all_self_attns += (layer_outputs[1],)
+    }
+
+    int64_t padding_idx;
+    int64_t vocab_size;
+    int64_t num_hidden_layers;
+    double eps;
+
+    std::vector<DecoderLayer> layers;
+    torch::Tensor norm;
+};
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
@@ -422,4 +482,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("__call__", &lm_head::forward)
         .def("set_weight", &lm_head::set_weight)
         .def("forward", &lm_head::forward);
+    py::class_<Model, std::shared_ptr<Model>>(m, "Model")
+        .def(py::init<py::object>())
+        .def("__call__", &Model::forward)
+        .def("weight_copy", &Model::weight_copy)
+        .def("decoder_weight_copy", &Model::decoder_weight_copy)
+        .def("forward", &Model::forward);
 }
