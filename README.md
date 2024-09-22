@@ -10,7 +10,10 @@
 To install `skkuter_op` package from the source code:
 ```bash
 git clone https://github.com/JunyeolYu/skkuter.git
-cd skkuter/skkuter_op
+cd skkuter
+pip install -r requirements.txt
+
+cd ./skkuter_op
 python3 setup.py install
 ```
 ## Usage
