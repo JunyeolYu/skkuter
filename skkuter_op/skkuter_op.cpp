@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 #include <pybind11/pybind11.h>
+#include <stdexcept>
 
 torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep);
 
@@ -384,12 +385,165 @@ struct lm_head {
     }
 };
 
+struct Model {
+    Model(py::object config) {
+        padding_idx = config.attr("pad_token_id").cast<int64_t>();
+        vocab_size = config.attr("vocab_size").cast<int64_t>();
+        num_hidden_layers = config.attr("num_hidden_layers").cast<int64_t>();
+        eps = config.attr("rms_norm_eps").cast<double>();
+
+        for (int i = 0; i < num_hidden_layers; i++) {
+            layers.emplace_back(config, i);
+        }
+    }
+
+    bool weight_copy(torch::Tensor x) {
+        norm = x;
+        return true;
+    }
+
+    bool decoder_weight_copy(const py::tuple& t, int64_t layer_idx) {
+        // set_weight()
+        if (t.size() != 6) {
+            throw std::runtime_error("Expected 6 tensors");
+            return false;
+        }
+
+        layers[layer_idx].set_weight(t[0].cast<torch::Tensor>(), t[1].cast<torch::Tensor>(), t[2].cast<torch::Tensor>(), t[3].cast<torch::Tensor>(), t[4].cast<torch::Tensor>(), t[5].cast<torch::Tensor>());
+        return true;
+    }
+
+    std::tuple<torch::Tensor, py::tuple> forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_values, bool output_attentions, bool output_hidden_states) {
+        auto all_hidden_states = py::make_tuple();
+        for (auto& layer : layers) {
+            if (output_hidden_states) {
+                all_hidden_states += py::make_tuple(x);
+            }
+            x = layer.forward(
+                x,
+                attention_mask,
+                position_ids,
+                past_key_values,
+                output_attentions);
+        }
+
+        // Normalization
+        x = norm * RMSnorm_forward(x, eps);
+
+        return std::make_tuple(x, all_hidden_states);
+
+        // FIXME: 구현 필요
+        // if output_attentions: all_self_attns += (layer_outputs[1],)
+    }
+
+    int64_t padding_idx;
+    int64_t vocab_size;
+    int64_t num_hidden_layers;
+    double eps;
+
+    std::vector<DecoderLayer> layers;
+    torch::Tensor norm;
+};
+
+float finfo(torch::Dtype dtype) {
+    if (dtype == torch::kFloat32) {
+        return std::numeric_limits<float>::lowest();
+    } else if (dtype == torch::kFloat64) {
+        return std::numeric_limits<double>::lowest();
+    } else if (dtype == torch::kFloat16) {
+        return -65504.0f; // Half-precision floating point
+    } else if (dtype == torch::kBFloat16) {
+        return -3.38953139e+38f; // BFloat16
+    } else if (dtype == torch::kInt32 || dtype == torch::kInt64 || dtype == torch::kInt16) {
+        return std::numeric_limits<int>::lowest();
+    } else {
+        // For unsupported types, return the most negative possible float
+        return std::numeric_limits<float>::lowest();
+    }
+}
+
+// Reference: https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py#L298
+// Convert `_prepare_4d_causal_attention_mask` by torch c++ binding
+// remove class `AttentionMaskConverter` and merge `_prepare_4d_causal_attention_mask`, `to_4d`, `_expand_mask` and `_make_causal_mask`
+torch::Tensor _prepare_4d_causal_attention_mask(
+    torch::Tensor attention_mask,
+    int64_t bsz,
+    int64_t seq_length,
+    torch::Tensor inputs_embeds,
+    int64_t past_key_values_length,
+    int64_t sliding_window = -1) {
+    
+    auto key_value_length = seq_length + past_key_values_length;
+    float min_value = finfo(inputs_embeds.scalar_type());
+    torch::Dtype dtype = inputs_embeds.scalar_type();
+
+    // 4d mask is passed through the layers
+    if (attention_mask.defined() && attention_mask.dim() == 2) {
+        // `to_4d`
+        // (torch::Tensor attention_mask_2d, int64_t query_length, int key_value_length, torch::Dtype dtype, int sliding_window) -> torch::Tensor
+        // create causal mask
+        // [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        torch::Tensor causal_4d_mask;
+        if (seq_length > 1) { // is_causal is always true
+            // `_make_causal_mask`
+            // (int batch_size, int query_length, int key_value_length, torch::Dtype dtype, torch::Device device, int past_key_values_length, int sliding_window = -1) -> torch::Tensor
+            // Make causal mask used for bi-directional self-attention.
+            auto device = attention_mask.device();
+            auto mask = torch::full({seq_length, seq_length}, min_value, torch::TensorOptions().dtype(dtype).device(device));
+            auto mask_cond = torch::arange(mask.size(-1), torch::TensorOptions().device(device));
+            mask.masked_fill_(mask_cond < (mask_cond + 1).reshape({attention_mask.sizes()[attention_mask.dim() - 1], 1}), 0);
+            
+            if (past_key_values_length > 0) {
+                auto past_mask = torch::zeros({seq_length, past_key_values_length}, torch::TensorOptions().dtype(dtype).device(device));
+                mask = torch::cat({past_mask, mask}, -1);
+            }
+
+            // add lower triangular sliding window mask if necessary
+            if (sliding_window > 0) {
+                auto diagonal = past_key_values_length - sliding_window + 1;
+                auto context_mask = 1 - torch::triu(torch::ones_like(mask), diagonal);
+                mask.masked_fill_(context_mask.to(torch::kBool), min_value);
+            }
+
+            causal_4d_mask = mask.unsqueeze(0).unsqueeze(0).expand({bsz, 1, seq_length, key_value_length});
+        }
+
+        // `_expand_mask` 
+        // (torch::Tensor mask, torch::Dtype dtype, int64_t tgt_len = -1) -> torch::Tensor
+        // [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        auto expanded_mask = attention_mask.unsqueeze(1).unsqueeze(2).expand({bsz, 1, seq_length, attention_mask.size(1)}).to(inputs_embeds.scalar_type());
+        auto inverted_mask = 1.0 - expanded_mask;
+        auto expanded_attn_mask = inverted_mask.masked_fill(inverted_mask.to(torch::kBool), min_value);
+
+        if (causal_4d_mask.defined()) {
+            expanded_attn_mask = causal_4d_mask.masked_fill(expanded_attn_mask.to(torch::kBool), min_value);
+        }
+
+        attention_mask = expanded_attn_mask;
+        
+    } else if (attention_mask.defined() && attention_mask.dim() == 4) {
+        std::vector<int64_t> expected_shape = {bsz, 1, seq_length, key_value_length};
+        if (attention_mask.sizes() != torch::IntArrayRef(expected_shape)) {
+            throw std::invalid_argument("Incorrect 4D attention_mask shape");
+        } else {
+            // if the 4D mask has correct shape - invert it and fill with negative infinity
+            auto inverted_mask = 1.0 - attention_mask;
+            attention_mask = inverted_mask.masked_fill(inverted_mask.to(torch::kBool), min_value);
+        }
+    } else {
+        // TODO: implement `to_causal_4d` (if needed)
+    }
+
+    return attention_mask;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("repeat_kv", &repeat_kv, "repeat_kv");
     m.def("apply_rotary_pos_emb", &apply_rotary_pos_emb, "apply_rotary_pos_emb");
     m.def("attention_forward", &attention_forward, "Attention forward pass in C++");
     m.def("RMSnorm_forward", &RMSnorm_forward, "RMSnorm_forward");
     m.def("qkv_split", &qkv_split, "qkv_split");
+    m.def("_prepare_4d_causal_attention_mask", &_prepare_4d_causal_attention_mask, "_prepare_4d_causal_attention_mask");
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
@@ -422,4 +576,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("__call__", &lm_head::forward)
         .def("set_weight", &lm_head::set_weight)
         .def("forward", &lm_head::forward);
+    py::class_<Model, std::shared_ptr<Model>>(m, "Model")
+        .def(py::init<py::object>())
+        .def("__call__", &Model::forward)
+        .def("weight_copy", &Model::weight_copy)
+        .def("decoder_weight_copy", &Model::decoder_weight_copy)
+        .def("forward", &Model::forward);
 }

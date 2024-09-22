@@ -741,15 +741,17 @@ class Phi3DecoderLayer(nn.Module):
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
         
         # init
-        self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
+        # self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
         
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
+        self.layer_idx = layer_idx
+    
     def _weight_copy(self):
         # initialize the custom decode layer
-        self.skkuter_decoder.set_weight(
+        # self.skkuter_decoder.set_weight
+        return (
                 self.self_attn.qkv_proj.weight.data,
                 self.self_attn.o_proj.weight.data,
                 self.input_layernorm.weight.data,
@@ -953,6 +955,8 @@ class Phi3Model(Phi3PreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        self.skkuter_model = skkuter_op.Model(config)
+
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -962,7 +966,8 @@ class Phi3Model(Phi3PreTrainedModel):
     def _weight_copy(self):
         self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
         for decoder_layer in self.layers:
-            decoder_layer._weight_copy()
+            self.skkuter_model.decoder_weight_copy(decoder_layer._weight_copy(), decoder_layer.layer_idx)
+        self.skkuter_model.weight_copy(self.norm.weight.data)
 
     # @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     def forward(
@@ -1036,13 +1041,13 @@ class Phi3Model(Phi3PreTrainedModel):
             # 2d mask is passed through the layers
             attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
         else:
-            # 4d mask is passed through the layers
-            attention_mask = _prepare_4d_causal_attention_mask(
+            attention_mask = skkuter_op._prepare_4d_causal_attention_mask(
                 attention_mask,
-                (batch_size, seq_length),
+                batch_size,
+                seq_length,
                 inputs_embeds,
                 past_key_values_length,
-                sliding_window=self.config.sliding_window,
+                self.config.sliding_window,
             )
 
         hidden_states = inputs_embeds
@@ -1052,26 +1057,18 @@ class Phi3Model(Phi3PreTrainedModel):
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
 
-        for decoder_layer in self.layers:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
-            hidden_states = decoder_layer.skkuter_decoder(
+        hidden_states, all_hidden_states = self.skkuter_model(
                 hidden_states,
                 attention_mask,
                 position_ids,
                 past_key_values,
                 output_attentions,
-                # use_cache=use_cache,
-            )
-
-            # if output_attentions:
-            #     all_self_attns += (layer_outputs[1],)
-
+                output_hidden_states)
+        
         if use_cache:
             next_decoder_cache = past_key_values
         
-        hidden_states = self.norm(hidden_states)
+        # hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
