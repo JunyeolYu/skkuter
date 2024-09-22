@@ -490,12 +490,13 @@ torch::Tensor _prepare_4d_causal_attention_mask(
             // Make causal mask used for bi-directional self-attention.
             auto device = attention_mask.device();
             auto mask = torch::full({seq_length, seq_length}, min_value, torch::TensorOptions().dtype(dtype).device(device));
-            auto mask_cond = torch::arange(mask.size(-1), torch::TensorOptions().device(device));
-            mask.masked_fill_(mask_cond < (mask_cond + 1).reshape({attention_mask.sizes()[attention_mask.dim() - 1], 1}), 0);
-            
+            auto mask_cond = torch::arange(seq_length, torch::TensorOptions().device(device));
+            mask.masked_fill_(mask_cond < (mask_cond.unsqueeze(-1)+1), 0);
+            // auto mask_cond = torch::arange(mask.size(-1), torch::TensorOptions().device(device));
+            // mask.masked_fill_(mask_cond < (mask_cond + 1).reshape({attention_mask.sizes()[attention_mask.dim() - 1], 1}), 0);
+
             if (past_key_values_length > 0) {
-                auto past_mask = torch::zeros({seq_length, past_key_values_length}, torch::TensorOptions().dtype(dtype).device(device));
-                mask = torch::cat({past_mask, mask}, -1);
+                mask = torch::cat({torch::zeros({seq_length, past_key_values_length}, torch::TensorOptions().dtype(dtype).device(device)), mask}, -1);
             }
 
             // add lower triangular sliding window mask if necessary
