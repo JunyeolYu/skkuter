@@ -944,7 +944,7 @@ class Phi3Model(Phi3PreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.embed_skkuter = skkuter_op.Embedding()
-        self.embed_dropout = skkuter_op.Dropout_skkuter(config.embd_pdrop)
+        
         self.layers = nn.ModuleList(
             [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )

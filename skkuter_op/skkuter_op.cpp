@@ -174,19 +174,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> qkv_split(
     return std::make_tuple(query_states, key_states, value_states);
 }
 
-struct Dropout_skkuter : torch::nn::Module {
-    Dropout_skkuter(double prob) {
-        dropout = torch::nn::Dropout(torch::nn::DropoutOptions().p(prob));
-        register_module("dropout", dropout);
-    }
-
-    torch::Tensor forward(torch::Tensor x) {
-        return dropout->forward(x);
-    }
-
-    torch::nn::Dropout dropout{nullptr};
-};
-
 struct Cache_skkuter {
     py::object dynamic_cache;
     // store object
@@ -548,10 +535,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<Phi3RotaryEmbedding>(m, "Phi3RotaryEmbedding")
         .def(py::init<int64_t, int64_t, double>())
         .def("forward", &Phi3RotaryEmbedding::forward);
-    py::class_<Dropout_skkuter, torch::nn::Module, std::shared_ptr<Dropout_skkuter>>(m, "Dropout_skkuter")
-        .def(py::init<double>())
-        .def("__call__", &Dropout_skkuter::forward)
-        .def("forward", &Dropout_skkuter::forward);
     py::class_<Cache_skkuter, std::shared_ptr<Cache_skkuter>>(m, "Cache_skkuter")
         .def(py::init<>())
         .def("set_dynamic_cache", &Cache_skkuter::set_dynamic_cache)
