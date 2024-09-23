@@ -392,7 +392,25 @@ struct Model {
         return true;
     }
 
-    std::tuple<torch::Tensor, py::tuple> forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_values, bool output_attentions, bool output_hidden_states) {
+    std::tuple<torch::Tensor, py::tuple> forward(
+        torch::Tensor x,
+        torch::Tensor attention_mask,
+        torch::Tensor position_ids,
+        py::object past_key_values,
+        bool output_attentions,
+        bool output_hidden_states,
+        int past_key_values_length,
+        int sliding_window) {
+        
+        // prepare attn_mask
+        attention_mask = _prepare_4d_causal_attention_mask(
+                attention_mask,
+                x,
+                past_key_values_length,
+                sliding_window
+            );
+        
+        // forward pass of model
         auto all_hidden_states = py::make_tuple();
         for (auto& layer : layers) {
             if (output_hidden_states) {
@@ -446,12 +464,13 @@ float finfo(torch::Dtype dtype) {
 // remove class `AttentionMaskConverter` and merge `_prepare_4d_causal_attention_mask`, `to_4d`, `_expand_mask` and `_make_causal_mask`
 torch::Tensor _prepare_4d_causal_attention_mask(
     torch::Tensor attention_mask,
-    int64_t bsz,
-    int64_t seq_length,
     torch::Tensor inputs_embeds,
     int64_t past_key_values_length,
     int64_t sliding_window = -1) {
     
+    int64_t bsz = inputs_embeds.size(0);
+    int64_t seq_length = inputs_embeds.size(1);
+
     auto key_value_length = seq_length + past_key_values_length;
     float min_value = finfo(inputs_embeds.scalar_type());
     torch::Dtype dtype = inputs_embeds.scalar_type();

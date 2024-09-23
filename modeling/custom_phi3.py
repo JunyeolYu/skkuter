@@ -1036,34 +1036,22 @@ class Phi3Model(Phi3PreTrainedModel):
                     " this may lead to unexpected behaviour for Flash Attention version of Phi3. Make sure to "
                     " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
                 )
-
-        if self._attn_implementation == "flash_attention_2":
-            # 2d mask is passed through the layers
-            attention_mask = attention_mask if (attention_mask is not None and 0 in attention_mask) else None
-        else:
-            attention_mask = skkuter_op._prepare_4d_causal_attention_mask(
-                attention_mask,
-                batch_size,
-                seq_length,
-                inputs_embeds,
-                past_key_values_length,
-                self.config.sliding_window,
-            )
-
-        hidden_states = inputs_embeds
-
+        
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
         next_decoder_cache = None
 
         hidden_states, all_hidden_states = self.skkuter_model(
-                hidden_states,
+                inputs_embeds,
                 attention_mask,
                 position_ids,
                 past_key_values,
                 output_attentions,
-                output_hidden_states)
+                output_hidden_states,
+                past_key_values_length,
+                self.config.sliding_window
+                )
         
         if use_cache:
             next_decoder_cache = past_key_values

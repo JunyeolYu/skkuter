@@ -40,8 +40,6 @@ std::tuple<torch::Tensor, torch::Tensor> apply_rotary_pos_emb(
 
 torch::Tensor _prepare_4d_causal_attention_mask(
     torch::Tensor attention_mask,
-    int64_t bsz,
-    int64_t seq_length,
     torch::Tensor inputs_embeds,
     int64_t past_key_values_length,
     int64_t sliding_window);
