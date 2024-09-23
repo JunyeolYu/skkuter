@@ -1,12 +1,4 @@
-#include <torch/extension.h>
-#include <torch/torch.h>
-#include "ATen/ATen.h"
-#include <cmath>
-#include <vector>
-#include <pybind11/pybind11.h>
-#include <stdexcept>
-
-torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep);
+#include "skkuter_op.h"
 
 torch::Tensor attention_forward(
     torch::Tensor query_states,
