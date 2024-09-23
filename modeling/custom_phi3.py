@@ -943,7 +943,6 @@ class Phi3Model(Phi3PreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.embed_skkuter = skkuter_op.Embedding()
         
         self.layers = nn.ModuleList(
             [Phi3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -955,6 +954,7 @@ class Phi3Model(Phi3PreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        # Custom Phi3Model
         self.skkuter_model = skkuter_op.Model(config)
 
     def get_input_embeddings(self):
@@ -964,10 +964,9 @@ class Phi3Model(Phi3PreTrainedModel):
         self.embed_tokens = value
 
     def _weight_copy(self):
-        self.embed_skkuter.set_weight(self.embed_tokens.weight.data)
         for decoder_layer in self.layers:
             self.skkuter_model.decoder_weight_copy(decoder_layer._weight_copy(), decoder_layer.layer_idx)
-        self.skkuter_model.weight_copy(self.norm.weight.data)
+        self.skkuter_model.weight_copy(self.embed_tokens.weight.data, self.norm.weight.data)
 
     # @add_start_docstrings_to_model_forward(PHI3_INPUTS_DOCSTRING)
     def forward(
@@ -992,79 +991,36 @@ class Phi3Model(Phi3PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # retrieve input_ids and inputs_embeds
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            batch_size, seq_length = input_ids.shape[:2]
-        elif inputs_embeds is not None:
-            batch_size, seq_length = inputs_embeds.shape[:2]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
-
-        past_key_values_length = 0
-
-        if self.gradient_checkpointing and self.training:
-            if use_cache:
-                logger.warning_once(
-                    "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
-                )
-                use_cache = False
-
-        if use_cache:
-            use_legacy_cache = not isinstance(past_key_values, Cache)
-            if use_legacy_cache:
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seq_length)
-
-        if position_ids is None:
-            device = input_ids.device if input_ids is not None else inputs_embeds.device
-            position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
-            )
-            position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
-        else:
-            position_ids = position_ids.view(-1, seq_length).long()
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_skkuter(input_ids)
-
-        if attention_mask is not None and self._attn_implementation == "flash_attention_2" and use_cache:
-            is_padding_right = attention_mask[:, -1].sum().item() != batch_size
-            if is_padding_right:
-                raise ValueError(
-                    "You are attempting to perform batched generation with padding_side='right'"
-                    " this may lead to unexpected behaviour for Flash Attention version of Phi3. Make sure to "
-                    " call `tokenizer.padding_side  = 'left'` before tokenizing the input. "
-                )
+        # if input_ids is not None and inputs_embeds is not None:
+        #     raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        # elif input_ids is not None:
+        #     batch_size, seq_length = input_ids.shape[:2]
+        # elif inputs_embeds is not None:
+        #     batch_size, seq_length = inputs_embeds.shape[:2]
+        # else:
+        #     raise ValueError("You have to specify either input_ids or inputs_embeds")
         
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
 
         hidden_states, all_hidden_states = self.skkuter_model(
+                input_ids,
                 inputs_embeds,
                 attention_mask,
                 position_ids,
                 past_key_values,
                 output_attentions,
                 output_hidden_states,
-                past_key_values_length,
-                self.config.sliding_window
+                self.config.sliding_window,
+                use_cache
                 )
         
-        if use_cache:
-            next_decoder_cache = past_key_values
-        
-        # hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
         next_cache = None
         if use_cache:
-            next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            # Assume that we always use the Dynamic cache
+            # next_cache = next_decoder_cache.to_legacy_cache() if use_legacy_cache else next_decoder_cache
+            next_cache = past_key_values
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
         return BaseModelOutputWithPast(

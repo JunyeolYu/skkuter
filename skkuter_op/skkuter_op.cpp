@@ -376,8 +376,9 @@ struct Model {
         }
     }
 
-    bool weight_copy(torch::Tensor x) {
-        norm = x;
+    bool weight_copy(torch::Tensor embed_, torch::Tensor norm_) {
+        embed = embed_;
+        norm = norm_;
         return true;
     }
 
@@ -393,15 +394,54 @@ struct Model {
     }
 
     std::tuple<torch::Tensor, py::tuple> forward(
-        torch::Tensor x,
+        torch::Tensor input_ids,
+        torch::optional<torch::Tensor> input_embeds,
         torch::Tensor attention_mask,
-        torch::Tensor position_ids,
+        torch::optional<torch::Tensor> position_ids_,
         py::object past_key_values,
         bool output_attentions,
         bool output_hidden_states,
-        int past_key_values_length,
-        int sliding_window) {
+        int sliding_window,
+        bool use_cache) {
         
+        torch::Tensor x;
+        torch::Tensor position_ids;
+        int past_key_values_length;
+
+        // retrieve input_ids and inputs_embeds
+        // TODO:
+
+        // embedding forward
+        if (input_embeds.has_value()) { 
+            x = input_embeds.value();
+        } else { // if input_embeds is None:
+            x = torch::embedding(embed, input_ids);
+        }
+
+        auto seq_length = x.size(1);
+        auto device = x.device();
+        // Cache handling
+        if (use_cache) {
+            // TODO: Handle the case where legacy_cache is used
+            // // ~ PYTHON ~
+            // bool use_legacy_cache = !(dynamic_cast<Cache*>(past_key_values.get()));
+            // if (use_legacy_cache) past_key_values = DynamicCache::from_legacy_cache(past_key_values);
+
+            // Assume that we always use the Dynamic cache
+            past_key_values_length = py::cast<int>(past_key_values.attr("get_usable_length")(seq_length));
+        }
+
+        // position_ids
+        if (position_ids_.has_value()) { 
+            position_ids = position_ids_.value();
+            position_ids = position_ids.view({-1, seq_length}).to(torch::kInt64);
+        } else { // if position_ids_ is None:
+            if (input_ids.defined()) device = input_ids.device();
+            position_ids = torch::arange(past_key_values_length, seq_length + past_key_values_length,
+                                                torch::TensorOptions().dtype(torch::kInt64).device(device));
+            position_ids = position_ids.unsqueeze(0).view({-1, seq_length});
+        }
+
         // prepare attn_mask
         attention_mask = _prepare_4d_causal_attention_mask(
                 attention_mask,
@@ -427,8 +467,10 @@ struct Model {
         // Normalization
         x = norm * RMSnorm_forward(x, eps);
 
-        return std::make_tuple(x, all_hidden_states);
+        // add hidden states from the last decoder layer
+        if (output_hidden_states) all_hidden_states += py::make_tuple(x);
 
+        return std::make_tuple(x, all_hidden_states);
         // FIXME: 구현 필요
         // if output_attentions: all_self_attns += (layer_outputs[1],)
     }
@@ -440,6 +482,7 @@ struct Model {
 
     std::vector<DecoderLayer> layers;
     torch::Tensor norm;
+    torch::Tensor embed;
 };
 
 float finfo(torch::Dtype dtype) {
