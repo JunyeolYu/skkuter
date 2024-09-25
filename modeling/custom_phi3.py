@@ -740,9 +740,6 @@ class Phi3DecoderLayer(nn.Module):
         self.config = config
         self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](config, layer_idx=layer_idx)
         
-        # init
-        # self.skkuter_decoder = skkuter_op.DecoderLayer(config, layer_idx)
-        
         self.mlp = Phi3MLP(config)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
