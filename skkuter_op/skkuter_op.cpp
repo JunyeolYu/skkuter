@@ -279,17 +279,14 @@ struct DecoderLayer {
         auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
         attn_weights = attn_weights + attention_mask;
         attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
-        attn_weights = torch::nn::functional::dropout(attn_weights, torch::nn::functional::DropoutFuncOptions().p(attention_dropout));
 
         auto attn_output = torch::matmul(attn_weights, value_states);
-        attn_output = attn_output.transpose(1, 2);//.contiguous();
+        attn_output = attn_output.transpose(1, 2).contiguous();
         attn_output = attn_output.reshape({bsz, q_len, hidden_size});
         attn_output = torch::matmul(attn_output, o_proj.t());
 
         // post_attention_layernorm
-        auto residual = x + torch::nn::functional::dropout(attn_output, torch::nn::functional::DropoutFuncOptions().p(resid_pdrop));
-
-        // post_attention_layernorm
+        auto residual = x + attn_output;
         hidden_states = post_attention_layernorm * RMSnorm_forward(residual, rms_norm_eps);
 
         // mlp
@@ -298,10 +295,7 @@ struct DecoderLayer {
         std::vector<torch::Tensor> chunks = up_states.chunk(2, -1);
 
         // down_proj
-        hidden_states = torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
-
-        // resid_mlp_dropout
-        auto output = residual + torch::nn::functional::dropout(hidden_states, torch::nn::functional::DropoutFuncOptions().p(resid_pdrop));
+        hidden_states = residual + torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
 
         return output;
     }
