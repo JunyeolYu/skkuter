@@ -295,9 +295,7 @@ struct DecoderLayer {
         std::vector<torch::Tensor> chunks = up_states.chunk(2, -1);
 
         // down_proj
-        hidden_states = residual + torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
-
-        return output;
+        return residual + torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
     }
 
     bool set_weight (torch::Tensor qkv, torch::Tensor o, torch::Tensor input_norm, torch::Tensor post_norm, torch::Tensor up, torch::Tensor down) {
