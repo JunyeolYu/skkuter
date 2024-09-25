@@ -266,10 +266,10 @@ struct DecoderLayer {
 
         // cache update
         // Assume: `cache` is not always None
-        py::dict cache_kwargs;
-        cache_kwargs["sin"] = sin;
-        cache_kwargs["cos"] = cos;
-        py::tuple kv_res = past_key_value.attr("update")(key_states, value_states, layer_idx, cache_kwargs);
+        // py::dict cache_kwargs;
+        // cache_kwargs["sin"] = sin;
+        // cache_kwargs["cos"] = cos;
+        py::tuple kv_res = past_key_value.attr("update")(key_states, value_states, layer_idx);
 
         // attnetion forward
         // repeat k/v heads if n_kv_heads < n_heads
