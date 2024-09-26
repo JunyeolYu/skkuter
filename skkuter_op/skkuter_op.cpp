@@ -173,6 +173,7 @@ struct Model {
         vocab_size = config.attr("vocab_size").cast<int64_t>();
         num_hidden_layers = config.attr("num_hidden_layers").cast<int64_t>();
         eps = config.attr("rms_norm_eps").cast<double>();
+        sliding_window = config.attr("sliding_window").cast<int>();
 
         for (int i = 0; i < num_hidden_layers; i++) {
             layers.emplace_back(config, i);
@@ -204,9 +205,9 @@ struct Model {
         py::object past_key_values,
         bool output_attentions,
         bool output_hidden_states,
-        int sliding_window,
         bool use_cache) {
-        
+        torch::NoGradGuard no_grad;
+
         torch::Tensor x;
         torch::Tensor position_ids;
         int past_key_values_length;
@@ -282,6 +283,7 @@ struct Model {
     int64_t vocab_size;
     int64_t num_hidden_layers;
     double eps;
+    int64_t sliding_window;
 
     std::vector<DecoderLayer> layers;
     torch::Tensor norm;

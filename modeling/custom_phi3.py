@@ -949,7 +949,6 @@ class Phi3Model(Phi3PreTrainedModel):
                 past_key_values,
                 output_attentions,
                 output_hidden_states,
-                self.config.sliding_window,
                 use_cache
                 )
         
