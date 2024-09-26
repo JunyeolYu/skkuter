@@ -23,8 +23,7 @@ torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
     torch::NoGradGuard no_grad;
     auto input_dtype = hidden_states.scalar_type();
     hidden_states = hidden_states.to(torch::kFloat32);
-    auto variance = hidden_states.pow(2).mean(-1, true);
-    hidden_states = hidden_states * torch::rsqrt(variance + eps);
+    hidden_states = hidden_states * torch::rsqrt(hidden_states.pow(2).mean(-1, true) + eps);
     return hidden_states.to(input_dtype);
 }
 
@@ -74,18 +73,16 @@ struct DecoderLayer {
         // Force float32 since bfloat16 loses precision on long contexts
         // FIXME: implement torch.autocast()
         auto freqs = torch::matmul(inv_freq_expanded, position_ids_expanded).transpose(1, 2);
-        auto emb = torch::cat({freqs, freqs}, -1);
+        auto emb = torch::cat({freqs, freqs}, -1).to(value_states.dtype());
         auto cos = emb.cos();
         auto sin = emb.sin();
-        cos = cos.to(value_states.dtype());
-        sin = sin.to(value_states.dtype());
 
         // apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids, unsqueeze_dim = 1);
         // FIXME: handling position_ids=None and unsqueeze_dim = 1
-        auto cos_ = cos.unsqueeze(1); //unsqueeze_dim
-        auto sin_ = sin.unsqueeze(1);
-        query_states = (query_states * cos_) + (rotate_half(query_states) * sin_);
-        key_states = (key_states * cos_) + (rotate_half(key_states) * sin_);
+        cos = cos.unsqueeze(1); //unsqueeze_dim
+        sin = sin.unsqueeze(1);
+        query_states = (query_states * cos) + (rotate_half(query_states) * sin);
+        key_states = (key_states * cos) + (rotate_half(key_states) * sin);
 
         // cache update
         // Assume: `cache` is not always None
@@ -99,17 +96,20 @@ struct DecoderLayer {
         key_states = repeat_kv(kv_res[0].cast<torch::Tensor>(), num_key_value_groups);
         value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
 
-        auto attn_weights = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
-        attn_weights = attn_weights + attention_mask;
-        attn_weights = torch::nn::functional::softmax(attn_weights, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
+        // reuse tensor, attn_weight -> query_states
+        query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
+        query_states = query_states + attention_mask;
+        query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
 
-        auto attn_output = torch::matmul(attn_weights, value_states);
-        attn_output = attn_output.transpose(1, 2).contiguous();
-        attn_output = attn_output.reshape({bsz, q_len, hidden_size});
-        attn_output = torch::matmul(attn_output, o_proj.t());
+        // reuse tensor, attn_output -> value_states
+        value_states = torch::matmul(query_states, value_states);
+        value_states = value_states.transpose(1, 2).contiguous();
+        value_states = value_states.reshape({bsz, q_len, hidden_size});
+        value_states = torch::matmul(value_states, o_proj.t());
 
         // post_attention_layernorm
-        auto residual = x + attn_output;
+        auto residual = x + value_states;
+        // reuse
         hidden_states = post_attention_layernorm * RMSnorm_forward(residual, rms_norm_eps);
 
         // mlp
