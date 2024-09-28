@@ -46,6 +46,8 @@ struct DecoderLayer {
         // init rope
         auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
         inv_freq = 1.0 / (torch::pow(config.attr("rope_theta").cast<double>(), torch::arange(0, head_dim, 2, options) / head_dim));
+        div = std::sqrt(static_cast<float>(head_dim));
+        pos = num_heads * head_dim;
     }
 
     torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions) {
@@ -58,7 +60,6 @@ struct DecoderLayer {
         auto qkv = torch::matmul(hidden_states, qkv_proj.t());
         auto bsz = qkv.size(0);
         auto q_len = qkv.size(1);
-        auto pos = num_heads * head_dim;
         auto query_states = qkv.slice(-1, 0, pos);
         auto key_states = qkv.slice(-1, pos, pos + num_key_value_heads * head_dim);
         auto value_states = qkv.slice(-1, pos + num_key_value_heads * head_dim, qkv.size(-1));
@@ -68,8 +69,8 @@ struct DecoderLayer {
         value_states = value_states.view({bsz, q_len, num_key_value_heads, head_dim}).transpose(1, 2);
 
         // rotary_embed
-        auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).to(torch::kFloat32).expand({position_ids.size(0), -1, 1});
-        auto position_ids_expanded = position_ids.unsqueeze(1).to(torch::kFloat32);
+        auto inv_freq_expanded = inv_freq.unsqueeze(0).unsqueeze(2).expand({position_ids.size(0), -1, 1});
+        auto position_ids_expanded = position_ids.unsqueeze(1);
         // Force float32 since bfloat16 loses precision on long contexts
         // FIXME: implement torch.autocast()
         auto freqs = torch::matmul(inv_freq_expanded, position_ids_expanded).transpose(1, 2);
@@ -97,9 +98,9 @@ struct DecoderLayer {
         value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
 
         // reuse tensor, attn_weight -> query_states
-        query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / std::sqrt(static_cast<float>(head_dim));
+        query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
         query_states = query_states + attention_mask;
-        query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1).dtype(torch::kFloat32)).to(value_states.scalar_type());
+        query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1.f)).to(value_states.scalar_type());
 
         // reuse tensor, attn_output -> value_states
         value_states = torch::matmul(query_states, value_states);
@@ -108,9 +109,10 @@ struct DecoderLayer {
         value_states = torch::matmul(value_states, o_proj.t());
 
         // post_attention_layernorm
-        auto residual = x + value_states;
+        // reuse tensor, residual -> key_states
+        key_states = x + value_states;
         // reuse
-        hidden_states = post_attention_layernorm * RMSnorm_forward(residual, rms_norm_eps);
+        hidden_states = post_attention_layernorm * RMSnorm_forward(key_states, rms_norm_eps);
 
         // mlp
         // gate_up_proj
@@ -118,7 +120,7 @@ struct DecoderLayer {
         std::vector<torch::Tensor> chunks = up_states.chunk(2, -1);
 
         // down_proj
-        return residual + torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
+        return key_states + torch::matmul(chunks[1] * torch::silu(chunks[0]), down_proj.t());
     }
 
     bool set_weight (torch::Tensor qkv, torch::Tensor o, torch::Tensor input_norm, torch::Tensor post_norm, torch::Tensor up, torch::Tensor down) {
@@ -144,7 +146,8 @@ struct DecoderLayer {
     double rms_norm_eps;
     double resid_pdrop;
     bool is_causal;
-
+    float div;
+    int pos;
     torch::Tensor qkv_proj;
     torch::Tensor o_proj;
     torch::Tensor inv_freq;
@@ -238,11 +241,11 @@ struct Model {
         // position_ids
         if (position_ids_.has_value()) { 
             position_ids = position_ids_.value();
-            position_ids = position_ids.view({-1, seq_length}).to(torch::kInt64);
+            position_ids = position_ids.view({-1, seq_length}).to(torch::kFloat);
         } else { // if position_ids_ is None:
             if (input_ids.defined()) device = input_ids.device();
             position_ids = torch::arange(past_key_values_length, seq_length + past_key_values_length,
-                                                torch::TensorOptions().dtype(torch::kInt64).device(device));
+                                                torch::TensorOptions().dtype(torch::kFloat).device(device));
             position_ids = position_ids.unsqueeze(0).view({-1, seq_length});
         }
 
