@@ -7,7 +7,8 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, pipeline
 from transformers.pipelines.pt_utils import KeyDataset
-# from transformers import logging as transformers_logging
+import skkuter_pipe
+
 import sys
 import logging
 import argparse
@@ -132,7 +133,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-    pipe = pipeline(
+    pipe = skkuter_pipe.skkuter_pipeline(
         "text-generation",
         model=model,
         tokenizer=tokenizer,
@@ -156,7 +157,7 @@ def main():
     ]
     
     for i in range(3):
-        output = pipe(messages, **generation_args)
+        output = pipe(messages, max_new_tokens=500)
 
     print(output[0]['generated_text'])
     end_2 = time.time()
@@ -166,7 +167,7 @@ def main():
     ####### Section 3. Load data and Inference -> Performance evaluation part #######
     start = time.time()
     data = load_dataset("json", data_files=dataset_path)['train']
-    outs = pipe(KeyDataset(data, 'message'), batch_size=bs, **generation_args)
+    outs = pipe(data, max_new_tokens=500, bs=bs)
     end = time.time()
 
     ####### Section 4. Accuracy (Just for leasderboard) #######
