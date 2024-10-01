@@ -32,6 +32,7 @@ class skkuter_pipeline:
         # create DynamicCache object
         cache = DynamicCache()
 
+        batch_size = inputs.input_ids.shape[0]
         # prepare inputs
         model_inputs = self.model.prepare_inputs_for_generation(
             inputs.input_ids, 
@@ -41,14 +42,12 @@ class skkuter_pipeline:
         )
 
         # track whether each sequence has finished
-        finished_sequences = [False] * inputs.input_ids.shape[0]
+        finished_sequences = [False] * batch_size
         # store generated toknes for each sequence
-        generated_tokens = [[] for _ in range(inputs.input_ids.shape[0])]
+        generated_tokens = [[] for _ in range(batch_size)]
 
         # Token generation phase
         for _ in range(max_new_tokens):
-            # print(model_inputs)
-            # print()
             res = self.model.forward(**model_inputs)
             
             # extract logits for the last token and select the token
@@ -61,7 +60,7 @@ class skkuter_pipeline:
                     generated_tokens[i].append(next_token_id.item())
 
                     # mark seq. as finished if EOS is generated
-                    if self.eos_token_id is not None and (next_token_id == self.eos_token_id or next_token_id == 32007):
+                    if next_token_id == self.eos_token_id or next_token_id == 32007:
                         finished_sequences[i] = True
 
             # break the generation loop
@@ -73,11 +72,10 @@ class skkuter_pipeline:
                 'position_ids': model_inputs['position_ids'][:, -1:] + 1,  # update position_ids
                 'past_key_values': res['past_key_values'],  # cache update
                 'use_cache': True,
-                'attention_mask': torch.cat([model_inputs['attention_mask'], torch.ones((inputs.input_ids.shape[0], 1), device=self.model.device)], dim=-1)
+                'attention_mask': torch.cat([model_inputs['attention_mask'], torch.ones((batch_size, 1), device=self.model.device)], dim=-1)
             }
             
         # decode tokens using batch_decode
-        generated_tokens = [torch.tensor(tokens) for tokens in generated_tokens]
         decoded_texts = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
         
         # format the output
