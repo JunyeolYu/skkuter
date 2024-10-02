@@ -3,6 +3,7 @@ from transformers.cache_utils import Cache, DynamicCache
 import datasets
 from transformers.pipelines.pt_utils import KeyDataset
 import skkuter_op
+from concurrent.futures import ThreadPoolExecutor
 
 class skkuter_pipeline:
     def __init__(self, task, model, tokenizer):
@@ -10,7 +11,7 @@ class skkuter_pipeline:
         self.model = model
         self.tokenizer = tokenizer
         self.eos_token_id = 32000
-        
+    
     def convert_batch_to_prompts(self, batches):
         prompts = []
         if isinstance(batches[0], dict):
@@ -25,17 +26,16 @@ class skkuter_pipeline:
             prompt += "<|assistant|> "
             prompts.append(prompt)
         return prompts
-    
-    def generate(self, prompt, max_new_tokens=50):
-        # convert prompts to tensors
-        prompts = self.convert_batch_to_prompts(prompt)
-        inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
-        # create DynamicCache object
-        cache = skkuter_op.Cache()
-        # cache = DynamicCache()
 
+    def prepare_batch(self, prompts):
+        prompts = self.convert_batch_to_prompts(prompts)
+        inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
+        return inputs
+
+    def generate(self, inputs, max_new_tokens=50):
+        # inputs are pre-prepared tensors
+        cache = skkuter_op.Cache()
         batch_size = inputs.input_ids.shape[0]
-        # prepare inputs
         model_inputs = self.model.prepare_inputs_for_generation(
             inputs.input_ids, 
             attention_mask=inputs.attention_mask, 
@@ -77,13 +77,15 @@ class skkuter_pipeline:
                 'attention_mask': torch.cat([model_inputs['attention_mask'], torch.ones((batch_size, 1), device=self.model.device)], dim=-1)
             }
             
+        return generated_tokens
+    
+    def decode_generated_tokens(self, generated_tokens):
         # decode tokens using batch_decode
         decoded_texts = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        
         # format the output
         decoded_texts = [[{'generated_text': text}] for text in decoded_texts]
         return decoded_texts
-    
+
     def __call__(
         self,
         prompts,
@@ -95,7 +97,10 @@ class skkuter_pipeline:
         **kwargs
     ):
         if isinstance(prompts, list):
-            return self.generate(prompts, max_new_tokens)[0]
+            inputs = self.prepare_batch(prompts)
+            generated_tokens = self.generate(inputs, max_new_tokens)
+            decoded_texts = self.decode_generated_tokens(generated_tokens)
+            return decoded_texts[0]
         elif isinstance(prompts, datasets.Dataset) or isinstance(prompts, KeyDataset):
             if isinstance(prompts, KeyDataset):
                 data = prompts.dataset
@@ -103,13 +108,39 @@ class skkuter_pipeline:
             else:
                 data = prompts
                 key = 'message'
-            
+
             n = len(prompts)
             outputs = []
-            for i in range(0, n, batch_size):
-                prompt = data[key][i:i + batch_size]
-                output = self.generate(prompt, max_new_tokens)
-                outputs += output
+            executor = ThreadPoolExecutor(max_workers=2)  # Increase max_workers to 2
+            i = 0
+            # prepare the first batch
+            prompt = data[key][i:i + batch_size]
+            next_prepare_future = executor.submit(self.prepare_batch, prompt)
+            next_decode_future = None
+            while i < n:
+                # wait for the prepared inputs
+                inputs = next_prepare_future.result()
+                # start preparing the next batch
+                i += batch_size
+                if i < n:
+                    prompt = data[key][i:i + batch_size]
+                    next_prepare_future = executor.submit(self.prepare_batch, prompt)
+                else:
+                    next_prepare_future = None
+                # process the current batch
+                generated_tokens = self.generate(inputs, max_new_tokens)
+                # start decoding asynchronously
+                decode_future = executor.submit(self.decode_generated_tokens, generated_tokens)
+                if next_decode_future:
+                    # wait for the previous decoding to finish
+                    decoded_texts = next_decode_future.result()
+                    outputs += decoded_texts
+                # set the next decode future
+                next_decode_future = decode_future
+            # handle the last batch's decoding
+            if next_decode_future:
+                decoded_texts = next_decode_future.result()
+                outputs += decoded_texts
             return outputs
         else:
             print("Wrong")
