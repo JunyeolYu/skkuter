@@ -2,6 +2,7 @@ import torch
 from transformers.cache_utils import Cache, DynamicCache
 import datasets
 from transformers.pipelines.pt_utils import KeyDataset
+import skkuter_op
 
 class skkuter_pipeline:
     def __init__(self, task, model, tokenizer):
@@ -30,7 +31,8 @@ class skkuter_pipeline:
         prompts = self.convert_batch_to_prompts(prompt)
         inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
         # create DynamicCache object
-        cache = DynamicCache()
+        cache = skkuter_op.Cache()
+        # cache = DynamicCache()
 
         batch_size = inputs.input_ids.shape[0]
         # prepare inputs
