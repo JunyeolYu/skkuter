@@ -84,18 +84,32 @@ class skkuter_pipeline:
         decoded_texts = [[{'generated_text': text}] for text in decoded_texts]
         return decoded_texts
     
-    def __call__(self, prompts, max_new_tokens=50, bs=1):
+    def __call__(
+        self,
+        prompts,
+        batch_size=1,
+        max_new_tokens=50,
+        return_full_text=False,
+        temperature=0.0,
+        do_sample=False,
+        **kwargs
+    ):
         if isinstance(prompts, list):
             return self.generate(prompts, max_new_tokens)[0]
-        elif isinstance(prompts, datasets.Dataset):
+        elif isinstance(prompts, datasets.Dataset) or isinstance(prompts, KeyDataset):
+            if isinstance(prompts, KeyDataset):
+                data = prompts.dataset
+                key = prompts.key
+            else:
+                data = prompts
+                key = 'message'
+            
             n = len(prompts)
             outputs = []
-            for i in range(0, n, bs):
-                prompt = prompts['message'][i:i + bs]
+            for i in range(0, n, batch_size):
+                prompt = data[key][i:i + batch_size]
                 output = self.generate(prompt, max_new_tokens)
                 outputs += output
             return outputs
-        elif isinstance(prompts, KeyDataset):
-            print("Not implemented")
         else:
             print("Wrong")
