@@ -53,8 +53,8 @@ struct Cache {
             key_cache.push_back(key_states);
             value_cache.push_back(value_states);
         } else {
-            key_cache[layer_idx] = torch::cat({key_cache[layer_idx],key_states}, -2);
-            value_cache[layer_idx] = torch::cat({value_cache[layer_idx],value_states}, -2);
+            key_cache[layer_idx] = std::move(torch::cat({key_cache[layer_idx],key_states}, -2));
+            value_cache[layer_idx] = std::move(torch::cat({value_cache[layer_idx],value_states}, -2));
         }
         return std::make_tuple(key_cache[layer_idx], value_cache[layer_idx]);
     }
@@ -69,7 +69,7 @@ struct Cache {
         if ((int64_t)key_cache.size() <= layer_idx) {
             key_cache.push_back(key_states);
         } else {
-            key_cache[layer_idx] = torch::cat({key_cache[layer_idx],key_states}, -2);
+            key_cache[layer_idx] = std::move(torch::cat({key_cache[layer_idx],key_states}, -2));
         }
         return key_cache[layer_idx];
     }
@@ -79,7 +79,7 @@ struct Cache {
         if ((int64_t)value_cache.size() <= layer_idx) {
             value_cache.push_back(value_states);
         } else {
-            value_cache[layer_idx] = torch::cat({value_cache[layer_idx],value_states}, -2);
+            value_cache[layer_idx] = std::move(torch::cat({value_cache[layer_idx],value_states}, -2));
         }
         return value_cache[layer_idx];
     }
@@ -96,7 +96,7 @@ struct Cache {
 struct DecoderLayer {
     DecoderLayer(py::object config, int64_t layer) {
         layer_idx = layer;
-        // Init 
+        // Init
         attention_dropout = config.attr("attention_dropout").cast<double>();
         hidden_size = config.attr("hidden_size").cast<int64_t>();
         num_heads = config.attr("num_attention_heads").cast<int64_t>();
@@ -116,12 +116,12 @@ struct DecoderLayer {
         pos = num_heads * head_dim;
     }
 
-    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, Cache& past_key_value, bool output_attentions) {
+    torch::Tensor forward(const torch::Tensor& x, const torch::Tensor& attention_mask, const torch::Tensor& position_ids, Cache& past_key_value, bool output_attentions) {
         torch::NoGradGuard no_grad;
 
         // input_layernorm
         auto hidden_states = input_layernorm * RMSnorm_forward(x, rms_norm_eps);
-        
+
         // qkv_split
         auto qkv = torch::matmul(hidden_states, qkv_proj.t());
         auto bsz = qkv.size(0);
@@ -154,12 +154,14 @@ struct DecoderLayer {
         // attnetion forward & cache update
         // past_key_value.update(key_states, value_states, layer_idx);
         key_states = repeat_kv(past_key_value.update_key(key_states, layer_idx), num_key_value_groups);
-        value_states = repeat_kv(past_key_value.update_value(value_states, layer_idx), num_key_value_groups);
 
         // reuse tensor, attn_weight -> query_states
         query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
         query_states = query_states + attention_mask;
         query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1.f)).to(value_states.scalar_type());
+
+        // update value-cache
+        value_states = repeat_kv(past_key_value.update_value(value_states, layer_idx), num_key_value_groups);
 
         // reuse tensor, attn_output -> value_states
         value_states = torch::matmul(query_states, value_states);
@@ -260,8 +262,8 @@ struct Model {
     }
 
     std::tuple<torch::Tensor, py::tuple> forward(
-        torch::Tensor input_ids,
-        torch::optional<torch::Tensor> input_embeds,
+        const torch::Tensor& input_ids,
+        const torch::optional<torch::Tensor>& input_embeds,
         torch::Tensor attention_mask,
         torch::optional<torch::Tensor> position_ids_,
         Cache& past_key_values,
@@ -278,7 +280,7 @@ struct Model {
         // TODO:
 
         // embedding forward
-        if (input_embeds.has_value()) { 
+        if (input_embeds.has_value()) {
             x = input_embeds.value();
         } else { // if input_embeds is None:
             x = torch::embedding(embed, input_ids);
@@ -292,7 +294,7 @@ struct Model {
         }
 
         // position_ids
-        if (position_ids_.has_value()) { 
+        if (position_ids_.has_value()) {
             position_ids = position_ids_.value();
             position_ids = position_ids.view({-1, seq_length}).to(torch::kFloat);
         } else { // if position_ids_ is None:
@@ -309,7 +311,7 @@ struct Model {
                 past_key_values_length,
                 sliding_window
             );
-        
+
         // forward pass of model
         auto all_hidden_states = py::make_tuple();
         for (auto& layer : layers) {
@@ -371,7 +373,7 @@ torch::Tensor _prepare_4d_causal_attention_mask(
     torch::Tensor inputs_embeds,
     int64_t past_key_values_length,
     int64_t sliding_window = -1) {
-    
+
     int64_t bsz = inputs_embeds.size(0);
     int64_t seq_length = inputs_embeds.size(1);
 
@@ -411,7 +413,7 @@ torch::Tensor _prepare_4d_causal_attention_mask(
             causal_4d_mask = mask.unsqueeze(0).unsqueeze(0).expand({bsz, 1, seq_length, key_value_length});
         }
 
-        // `_expand_mask` 
+        // `_expand_mask`
         // (torch::Tensor mask, torch::Dtype dtype, int64_t tgt_len = -1) -> torch::Tensor
         // [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         auto expanded_mask = attention_mask.unsqueeze(1).unsqueeze(2).expand({bsz, 1, seq_length, attention_mask.size(1)}).to(inputs_embeds.scalar_type());
@@ -423,7 +425,7 @@ torch::Tensor _prepare_4d_causal_attention_mask(
         }
 
         attention_mask = expanded_attn_mask;
-        
+
     } else if (attention_mask.defined() && attention_mask.dim() == 4) {
         std::vector<int64_t> expected_shape = {bsz, 1, seq_length, key_value_length};
         if (attention_mask.sizes() != torch::IntArrayRef(expected_shape)) {
