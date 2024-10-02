@@ -1108,6 +1108,10 @@ class Phi3ForCausalLM(Phi3PreTrainedModel):
                 cache_length = past_key_values.get_seq_length()
                 past_length = past_key_values.seen_tokens
                 max_cache_length = past_key_values.get_max_length()
+            elif isinstance(past_key_values, skkuter_op.Cache):
+                cache_length = 0 #past_key_values.get_seq_length(0)
+                past_length = 0 #past_key_values.get_seen_token()
+                max_cache_length = None
             else:
                 cache_length = past_length = past_key_values[0][0].shape[2]
                 max_cache_length = None

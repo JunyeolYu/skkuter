@@ -27,6 +27,72 @@ torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
     return hidden_states.to(input_dtype);
 }
 
+struct Cache {
+    Cache() {
+        seen_tokens = 0;
+    }
+
+    int64_t get_seq_length(int64_t layer_idx = 0) {
+        if ((int64_t)key_cache.size() <= layer_idx) {
+            return 0;
+        }
+        return key_cache[layer_idx].size(-2);
+    }
+    py::object get_max_length() {
+        return py::none();
+    }
+
+    std::tuple<torch::Tensor, torch::Tensor> update(torch::Tensor key_states, torch::Tensor value_states, int64_t layer_idx) {
+        // update the number of seen tokens
+        if (layer_idx == 0) {
+            seen_tokens += key_states.size(-2);
+        }
+
+        // update the KV-cache
+        if ((int64_t)key_cache.size() <= layer_idx) {
+            key_cache.push_back(key_states);
+            value_cache.push_back(value_states);
+        } else {
+            key_cache[layer_idx] = torch::cat({key_cache[layer_idx],key_states}, -2);
+            value_cache[layer_idx] = torch::cat({value_cache[layer_idx],value_states}, -2);
+        }
+        return std::make_tuple(key_cache[layer_idx], value_cache[layer_idx]);
+    }
+
+    torch::Tensor update_key(torch::Tensor key_states, int64_t layer_idx) {
+        // update the number of seen tokens
+        if (layer_idx == 0) {
+            seen_tokens += key_states.size(-2);
+        }
+
+        // update the KV-cache
+        if ((int64_t)key_cache.size() <= layer_idx) {
+            key_cache.push_back(key_states);
+        } else {
+            key_cache[layer_idx] = torch::cat({key_cache[layer_idx],key_states}, -2);
+        }
+        return key_cache[layer_idx];
+    }
+
+    torch::Tensor update_value(torch::Tensor value_states, int64_t layer_idx) {
+        // update the KV-cache
+        if ((int64_t)value_cache.size() <= layer_idx) {
+            value_cache.push_back(value_states);
+        } else {
+            value_cache[layer_idx] = torch::cat({value_cache[layer_idx],value_states}, -2);
+        }
+        return value_cache[layer_idx];
+    }
+
+    int64_t get_usable_length(int new_seq_length, int layer_idx=0) {
+        return get_seq_length(layer_idx);
+    }
+
+    std::vector<torch::Tensor> key_cache;
+    std::vector<torch::Tensor> value_cache;
+    int64_t seen_tokens;
+};
+
 struct DecoderLayer {
     DecoderLayer(py::object config, int64_t layer) {
         layer_idx = layer;
@@ -50,7 +116,7 @@ struct DecoderLayer {
         pos = num_heads * head_dim;
     }
 
-    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions) {
+    torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, Cache& past_key_value, bool output_attentions) {
         torch::NoGradGuard no_grad;
 
         // input_layernorm
@@ -85,17 +151,10 @@ struct DecoderLayer {
         query_states = (query_states * cos) + (rotate_half(query_states) * sin);
         key_states = (key_states * cos) + (rotate_half(key_states) * sin);
 
-        // cache update
-        // Assume: `cache` is not always None
-        // py::dict cache_kwargs;
-        // cache_kwargs["sin"] = sin;
-        // cache_kwargs["cos"] = cos;
-        py::tuple kv_res = past_key_value.attr("update")(key_states, value_states, layer_idx);
-
-        // attnetion forward
-        // repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(kv_res[0].cast<torch::Tensor>(), num_key_value_groups);
-        value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
+        // attnetion forward & cache update
+        // past_key_value.update(key_states, value_states, layer_idx);
+        key_states = repeat_kv(past_key_value.update_key(key_states, layer_idx), num_key_value_groups);
+        value_states = repeat_kv(past_key_value.update_value(value_states, layer_idx), num_key_value_groups);
 
         // reuse tensor, attn_weight -> query_states
         query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
@@ -205,7 +264,7 @@ struct Model {
         torch::optional<torch::Tensor> input_embeds,
         torch::Tensor attention_mask,
         torch::optional<torch::Tensor> position_ids_,
-        py::object past_key_values,
+        Cache& past_key_values,
         bool output_attentions,
         bool output_hidden_states,
         bool use_cache) {
@@ -229,13 +288,7 @@ struct Model {
         auto device = x.device();
         // Cache handling
         if (use_cache) {
-            // TODO: Handle the case where legacy_cache is used
-            // // ~ PYTHON ~
-            // bool use_legacy_cache = !(dynamic_cast<Cache*>(past_key_values.get()));
-            // if (use_legacy_cache) past_key_values = DynamicCache::from_legacy_cache(past_key_values);
-
-            // Assume that we always use the Dynamic cache
-            past_key_values_length = py::cast<int>(past_key_values.attr("get_usable_length")(seq_length));
+            past_key_values_length = past_key_values.get_usable_length(seq_length);
         }
 
         // position_ids
@@ -408,4 +461,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("weight_copy", &Model::weight_copy)
         .def("decoder_weight_copy", &Model::decoder_weight_copy)
         .def("forward", &Model::forward);
+    py::class_<Cache, std::shared_ptr<Cache>>(m, "Cache")
+        .def(py::init<>())
+        .def("get_seq_length", &Cache::get_seq_length)
+        .def("get_max_length", &Cache::get_max_length)
+        .def("update", &Cache::update)
+        .def("get_usable_length", &Cache::get_usable_length)
+        .def("update_key", &Cache::update_key)
+        .def("update_value", &Cache::update_value);
 }
