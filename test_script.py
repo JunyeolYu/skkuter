@@ -13,6 +13,19 @@ import sys
 import logging
 import argparse
 
+
+import torch
+
+# Check if CUDA is available
+if torch.cuda.is_available():
+    num_gpus = torch.cuda.device_count()  # Get the number of available GPUs
+    for i in range(num_gpus):
+        print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+else:
+    print("No GPUs available.")
+
+
+
 dev_map = {
     'model.embed_tokens': 0,
     'model.embed_dropout': 0,
@@ -138,6 +151,7 @@ def main():
         model=model,
         tokenizer=tokenizer,
     )
+
 
     generation_args = {
         "max_new_tokens": 500,
