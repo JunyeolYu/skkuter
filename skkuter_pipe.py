@@ -30,11 +30,13 @@ class skkuter_pipeline:
         # convert prompts to tensors
         prompts = self.convert_batch_to_prompts(prompt)
         inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
-        # create DynamicCache object
-        cache = skkuter_op.Cache()
-        # cache = DynamicCache()
-
+        
         batch_size = inputs.input_ids.shape[0]
+        seq_len = inputs.input_ids.shape[1]
+        
+        # create DynamicCache object
+        cache = skkuter_op.Cache(batch_size, seq_len, self.model.config.num_hidden_layers)
+
         # prepare inputs
         model_inputs = self.model.prepare_inputs_for_generation(
             inputs.input_ids, 
