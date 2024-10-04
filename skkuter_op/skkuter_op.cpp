@@ -33,7 +33,6 @@ struct Cache {
         max_seq_length = seq_len + 25; // FIXME: this should be changed
         auto options = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA);
         for (int i = 0; i < num_layers; i++) {
-            
             key_cache.push_back(torch::zeros({batch_size, 10, max_seq_length, 128}, options));
             value_cache.push_back(torch::zeros({batch_size, 10, max_seq_length, 128}, options));
         }
@@ -50,25 +49,23 @@ struct Cache {
     }
 
     torch::Tensor update_key(torch::Tensor key_states, int64_t layer_idx) {
-        int64_t new_tokens = key_states.size(-2);
-        if (current_length + key_states.size(2) <= max_seq_length) {
-            key_cache[layer_idx].slice(2, current_length, current_length + new_tokens) = key_states;
-            return key_cache[layer_idx].slice(2, 0, current_length + new_tokens);
+        int64_t next_length = current_length + key_states.size(-2);
+        if (next_length <= max_seq_length) {
+            key_cache[layer_idx].slice(2, current_length, next_length) = key_states;
         } else {
-            key_cache[layer_idx] = std::move(torch::cat({key_cache[layer_idx],key_states}, -2));
-            return key_cache[layer_idx];
+            key_cache[layer_idx] = std::move(torch::cat({key_cache[layer_idx], key_states}, -2));
         }
+        return key_cache[layer_idx].slice(2, 0, next_length);
     }
 
     torch::Tensor update_value(torch::Tensor value_states, int64_t layer_idx) {
-        int64_t new_tokens = value_states.size(-2);
-        if (current_length + value_states.size(2) <= max_seq_length) {
-            value_cache[layer_idx].slice(2, current_length, current_length + new_tokens) = value_states;
-            return value_cache[layer_idx].slice(2, 0, current_length + new_tokens);
+        int64_t next_length = current_length + value_states.size(-2);
+        if (next_length <= max_seq_length) {
+            value_cache[layer_idx].slice(2, current_length, next_length) = value_states;
         } else {
-            value_cache[layer_idx] = std::move(torch::cat({value_cache[layer_idx],value_states}, -2));
-            return value_cache[layer_idx];
+            value_cache[layer_idx] = std::move(torch::cat({value_cache[layer_idx], value_states}, -2));
         }
+        return value_cache[layer_idx].slice(2, 0, next_length);
     }
 
     void length_update(int64_t x) {
