@@ -370,9 +370,9 @@ torch::Tensor _prepare_4d_causal_attention_mask(
     int64_t seq_length = inputs_embeds.size(1);
 
     auto key_value_length = seq_length + past_key_values_length;
-    float min_value = finfo(inputs_embeds.scalar_type());
     torch::Dtype dtype = inputs_embeds.scalar_type();
-
+    float min_value = finfo(dtype);
+    
     // 4d mask is passed through the layers
     if (attention_mask.defined() && attention_mask.dim() == 2) {
         // `to_4d`
@@ -408,7 +408,7 @@ torch::Tensor _prepare_4d_causal_attention_mask(
         // `_expand_mask`
         // (torch::Tensor mask, torch::Dtype dtype, int64_t tgt_len = -1) -> torch::Tensor
         // [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-        auto expanded_mask = attention_mask.unsqueeze(1).unsqueeze(2).expand({bsz, 1, seq_length, attention_mask.size(1)}).to(inputs_embeds.scalar_type());
+        auto expanded_mask = attention_mask.unsqueeze(1).unsqueeze(2).expand({bsz, 1, seq_length, attention_mask.size(1)}).to(dtype);
         auto inverted_mask = 1.0 - expanded_mask;
         auto expanded_attn_mask = inverted_mask.masked_fill(inverted_mask.to(torch::kBool), min_value);
 
