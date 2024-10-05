@@ -146,6 +146,9 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
+    #compile the model
+    model = torch.compile(model, mode="max-autotune")
+
     pipe = skkuter_pipe.skkuter_pipeline(
         "text-generation",
         model=model,
