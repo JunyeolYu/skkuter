@@ -72,6 +72,8 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
     int current_head = blockIdx.y;
     int current_seq = blockIdx.x;
 
+    BTYPE divv = CONVERT(div);
+
     
     int q_offset = (current_batch * nH * qN * d) + (current_head * qN * d) + (current_seq * d);  
     int o_offset = (current_batch * nH * qN * d) + (current_head * qN * d) + (current_seq * d);  
@@ -79,37 +81,37 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
     int v_offset = (current_batch * nH * kN * d) + (current_head * kN * d);
     int mask_offset = (current_batch * kN * qN) + (current_seq * kN);
 
-    BTYPE* q = Q + q_offset; // (1 x d)
-    BTYPE* o = O + o_offset; // (1 x d)
-    BTYPE* v = V + v_offset; // (kN x d)
-    BTYPE* k = K + k_offset; // (d x kN)
+    BTYPE* q = &Q[q_offset]; // (1 x d)
+    BTYPE* o = &O[o_offset]; // (1 x d)
+    BTYPE* v = &V[v_offset]; // (kN x d)
+    BTYPE* k = &K[k_offset]; // (d x kN)
 
-    extern __shared__ float sram[];
-    float* shared_o = sram;
+    extern __shared__ BTYPE sram[];
+    BTYPE* shared_o = sram;
 
     
     for(int i = 0; i < Tc; i++){
         BTYPE* k_ptr = k + (i * Bc); // (d x Bc)
-        float sum = 0.0f;
+        BTYPE sum = CONVERT(0.0f);
 
         if(i*Bc + tx >= kN){
             continue;
         }
 
         for(int j = 0; j < d; j++){
-            sum += CONVERT_TO_FLOAT(q[j] * k_ptr[j * kN + tx]);
+            sum += q[j] * k_ptr[j * kN + tx];
         }
 
-        shared_o[i*Bc+tx] = sum * div;
-        shared_o[i*Bc+tx] += CONVERT_TO_FLOAT(mask[mask_offset + i*Bc+tx]);
+        shared_o[i*Bc+tx] = sum * divv;
+        shared_o[i*Bc+tx] += mask[mask_offset + i*Bc+tx];
         
     }
 
     __syncthreads();
 
     //Simply compute the softmax
-    float sum = 0.0f;
-    float max = -INFINITY;
+    BTYPE sum = CONVERT(0.0f);
+    BTYPE max = shared_o[0];
     for(int i = 0; i < kN; i++){;
         if(shared_o[i] > max){
             max = shared_o[i];
@@ -118,9 +120,10 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
 
     for(int i = tx; i < kN; i = i + Bc){
         if(i < kN)
-            shared_o[i] = __expf(shared_o[i] - max);
+            shared_o[i] = hexp(shared_o[i] - max);
     }
 
+    __syncthreads();
     for(int i = 0; i < kN; i++){
         sum += shared_o[i];        
     }
@@ -134,44 +137,36 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
 
     if(tx == 0){
         for(int i = 0; i < d; i++){
-            float sum = 0.0f;
+            BTYPE sum = CONVERT(0.0f);
             for(int j = 0; j < kN; j++){
-                sum += shared_o[j] * CONVERT_TO_FLOAT(v[j * d + i]);
+                sum += shared_o[j] * v[j * d + i];
             }
-
-            o[i] = CONVERT(sum);
+            o[i] = sum;
         }
 
     }
 
 }
 
-int get_sram_size(){
-    
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    return prop.sharedMemPerMultiprocessor;
 
-}
 
 torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask){
 
     K = K.transpose(2,3);
 
-    int M = get_sram_size();
+    //make sure they are contiguous
+    Q = Q.contiguous();
+    K = K.contiguous();
+    V = V.contiguous();
+    mask = mask.contiguous();
+
+
     int batch = Q.size(0); int nH = Q.size(1); 
     int qN = Q.size(2); int kN = K.size(3); //Because k is transposed
     int d = Q.size(3);
 
     //For scaling the dot product
     auto div = 1.0f/std::sqrt(static_cast<float>(d));
-
-
-    /* KHAN
-        The number of columns in K will determine the number of threads
-        But it should be multiple of 32
-        Get bc such that kN is a multiple of bc
-    */
 
     int Bc = 32; 
     int Tc = ceil((float)kN / (float)Bc);
@@ -193,10 +188,7 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     __nv_bfloat16* mask_ptr = reinterpret_cast<__nv_bfloat16*>(mask.data_ptr());
 
 
-    /* KHAN
-        Launch the kernel for attention
-    */
-    attention_forward_kernel<<<grid, block, kN*4>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
+    attention_forward_kernel<<<grid, block, kN*2>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
         div,
         Tc, Bc,
         d, qN, kN);
