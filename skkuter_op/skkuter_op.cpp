@@ -1,4 +1,5 @@
 #include "skkuter_op.h"
+#include "cuDecoder/decoder.h"
 
 torch::Tensor repeat_kv(torch::Tensor hidden_states, int64_t n_rep) {
     //This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -53,11 +54,20 @@ struct DecoderLayer {
     torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions) {
         torch::NoGradGuard no_grad;
 
+        
+        // auto qkv = cuda_attn_forward(
+        //     /*RMSNorm:1*/x, rms_norm_eps, input_layernorm,
+        //     /*QKVMatrix*/qkv_proj.t());
+        
+        
+        
+        
         // input_layernorm
         auto hidden_states = input_layernorm * RMSnorm_forward(x, rms_norm_eps);
+        auto qkv = torch::matmul(hidden_states, qkv_proj.t());
+
         
         // qkv_split
-        auto qkv = torch::matmul(hidden_states, qkv_proj.t());
         auto bsz = qkv.size(0);
         auto q_len = qkv.size(1);
         auto query_states = qkv.slice(-1, 0, pos);
@@ -97,13 +107,34 @@ struct DecoderLayer {
         key_states = repeat_kv(kv_res[0].cast<torch::Tensor>(), num_key_value_groups);
         value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
 
+
+        //size of attention mask
+        
+
         // reuse tensor, attn_weight -> query_states
+        ////////////////////////****************ATTENTION BLOCK****************///////////////*/
+        
         query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
+
+        auto mask_size = attention_mask.sizes();
+        std::cout << "Mask sizes :" << mask_size << std::endl;
+
+
         query_states = query_states + attention_mask;
         query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1.f)).to(value_states.scalar_type());
-
         // reuse tensor, attn_output -> value_states
         value_states = torch::matmul(query_states, value_states);
+
+        auto query_sizes = query_states.sizes();
+        std::cout << "Query sizes :" << query_sizes<< std::endl; 
+        
+        myTest();
+        //value_states = cuda_attn_forward(query_states, key_states.transpose(2,3), value_states, attention_mask);
+        
+        ////////////////////////////////////////////////////////////////////////////////////////
+
+
+
         value_states = value_states.transpose(1, 2).contiguous();
         value_states = value_states.reshape({bsz, q_len, hidden_size});
         value_states = torch::matmul(value_states, o_proj.t());
@@ -155,6 +186,7 @@ struct DecoderLayer {
     torch::Tensor post_attention_layernorm;
     torch::Tensor gate_up_proj;
     torch::Tensor down_proj;
+    int number_of_sequences[1024];
     // struct Cache_skkuter cache;
 };
 
