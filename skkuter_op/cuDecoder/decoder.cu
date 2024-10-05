@@ -169,7 +169,7 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     //For scaling the dot product
     auto div = 1.0f/std::sqrt(static_cast<float>(d));
 
-    int Bc = 32; 
+    int Bc = 64; 
     int Tc = ceil((float)kN / (float)Bc);
     
     dim3 block(Bc, 1, 1);
@@ -210,6 +210,8 @@ void post_attention_forward_kernel(BTYPE* value_state, BTYPE* o_proj, BTYPE* x, 
 
     int current_sequence = blockIdx.x;
     int current_batch = blockIdx.y;
+
+    
     
 
     //find the row and the column this block is responsible for
@@ -218,7 +220,17 @@ void post_attention_forward_kernel(BTYPE* value_state, BTYPE* o_proj, BTYPE* x, 
     int x_offset = (current_batch * seq * d) + (current_sequence * d);
     
 
-    BTYPE* value_ptr = &value_state[value_offset];
+    //move value to sram
+    extern __shared__ BTYPE sram[];
+    BTYPE* value_ptr = sram;
+
+    for(int i = threadIdx.x; i < d; i += blockDim.x){
+        if(i >= d) continue;
+        value_ptr[i] = value_state[value_offset + i];
+    }
+
+    __syncthreads();
+
     BTYPE* o_ptr = &output[o_offset];
     BTYPE* x_ptr = &x[x_offset];
 
@@ -243,7 +255,7 @@ torch::Tensor post_attention_forward(torch::Tensor value_state, torch::Tensor o_
 
     int batch = value_state.size(0); int seq = value_state.size(1); int d = value_state.size(2);
 
-    dim3 block(128, 1, 1);
+    dim3 block(1024, 1, 1);
     dim3 grid(seq, batch, 1);
 
     //make sure all the tensors are contiguous
@@ -259,7 +271,9 @@ torch::Tensor post_attention_forward(torch::Tensor value_state, torch::Tensor o_
     torch::Tensor output = torch::zeros({batch, seq, d}, value_state.options());
     __nv_bfloat16* output_ptr = reinterpret_cast<__nv_bfloat16*>(output.data_ptr());
 
-    post_attention_forward_kernel<<<grid, block>>>(value_state_ptr, o_proj_ptr, x_ptr, output_ptr, batch, seq, d);
+    int sram_size = d * 2;
+
+    post_attention_forward_kernel<<<grid, block, sram_size>>>(value_state_ptr, o_proj_ptr, x_ptr, output_ptr, batch, seq, d);
 
     cudaDeviceSynchronize();
     CHECK_LAST_CUDA_ERROR();
