@@ -202,6 +202,74 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
 }
 
 
+
+//torch::Tensor rms_norm_weight, double epsilon, torch::Tensor gate_up, torch::Tensor gate_down
+
+__global__
+void post_attention_forward_kernel(BTYPE* value_state, BTYPE* o_proj, BTYPE* x, BTYPE* output, int batch, int seq, int d){
+
+    int current_sequence = blockIdx.x;
+    int current_batch = blockIdx.y;
+    
+
+    //find the row and the column this block is responsible for
+    int value_offset = (current_batch * seq * d) + (current_sequence * d);
+    int o_offset = (current_batch * seq * d) + (current_sequence * d);
+    int x_offset = (current_batch * seq * d) + (current_sequence * d);
+    
+
+    BTYPE* value_ptr = &value_state[value_offset];
+    BTYPE* o_ptr = &output[o_offset];
+    BTYPE* x_ptr = &x[x_offset];
+
+    int tx = threadIdx.x;
+    for(int i = tx; i < d; i += blockDim.x){
+        if(i >= d) continue;
+        BTYPE sum = CONVERT(0.0f);
+        for(int j = 0; j < d; j++){
+            sum += value_ptr[j] * o_proj[j * d + i];
+        }
+
+
+        o_ptr[i] = sum + x_ptr[i];
+    }
+
+    
+}
+
+
+torch::Tensor post_attention_forward(torch::Tensor value_state, torch::Tensor o_proj, torch::Tensor x)
+{
+
+    int batch = value_state.size(0); int seq = value_state.size(1); int d = value_state.size(2);
+
+    dim3 block(128, 1, 1);
+    dim3 grid(seq, batch, 1);
+
+    //make sure all the tensors are contiguous
+    value_state = value_state.contiguous();
+    o_proj = o_proj.contiguous();
+    x = x.contiguous();
+
+    //get the pointers
+    __nv_bfloat16* value_state_ptr = reinterpret_cast<__nv_bfloat16*>(value_state.data_ptr());
+    __nv_bfloat16* o_proj_ptr = reinterpret_cast<__nv_bfloat16*>(o_proj.data_ptr());
+    __nv_bfloat16* x_ptr = reinterpret_cast<__nv_bfloat16*>(x.data_ptr());
+
+    torch::Tensor output = torch::zeros({batch, seq, d}, value_state.options());
+    __nv_bfloat16* output_ptr = reinterpret_cast<__nv_bfloat16*>(output.data_ptr());
+
+    post_attention_forward_kernel<<<grid, block>>>(value_state_ptr, o_proj_ptr, x_ptr, output_ptr, batch, seq, d);
+
+    cudaDeviceSynchronize();
+    CHECK_LAST_CUDA_ERROR();
+
+    return output;
+
+
+}
+
+
 void myTest(){
     torch::Tensor Q = torch::randn({1, 40, 1, 128}, ELEMENT_TYPE).to(torch::kCUDA);
     torch::Tensor Q2 = torch::empty({1, 40, 1, 128}, ELEMENT_TYPE).to(torch::kCUDA);

@@ -7,3 +7,4 @@
 
 void myTest();
 torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask);
+torch::Tensor post_attention_forward(torch::Tensor value_state, torch::Tensor o_proj, torch::Tensor x);

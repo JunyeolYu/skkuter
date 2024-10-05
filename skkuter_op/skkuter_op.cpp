@@ -130,15 +130,22 @@ struct DecoderLayer {
 
         value_states = value_states.transpose(1, 2).contiguous();
         value_states = value_states.reshape({bsz, q_len, hidden_size});
-        value_states = torch::matmul(value_states, o_proj.t());
-        //print the shape of o_proj before and after matmul
+
+        //current phase
+        //value_states = torch::matmul(value_states, o_proj.t());
+        //key_states = x + value_states;
+        key_states = post_attention_forward(value_states, o_proj.t(), x);
 
 
-        // post_attention_layernorm
-        // reuse tensor, residual -> key_states
-        key_states = x + value_states;
-        // reuse
         hidden_states = post_attention_layernorm * RMSnorm_forward(key_states, rms_norm_eps);
+
+        // std::cout << "x: " << x.sizes() << std::endl;
+        // std::cout << "value_states: " << value_states.sizes() << std::endl;
+        // std::cout << "hidden_states: " << hidden_states.sizes() << std::endl;
+        // std::cout << "gate_up_proj: " << gate_up_proj.sizes() << std::endl;
+        // std::cout << "down_proj: " << down_proj.sizes() << std::endl;
+        // std::cout << "post_attention_layernorm: " << post_attention_layernorm.sizes() << std::endl;
+        
 
         // mlp
         // gate_up_proj
