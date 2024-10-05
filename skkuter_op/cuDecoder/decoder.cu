@@ -92,6 +92,10 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
         BTYPE* k_ptr = k + (i * Bc); // (d x Bc)
         BTYPE sum = CONVERT(0.0f);
 
+        //skip if the index is out of bound
+        if(i * Bc + tx >= kN)
+            continue;
+
         for(int j = 0; j < d; j++){
             sum += q[j] * k_ptr[j * kN + tx];
         }
@@ -166,8 +170,10 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     /* KHAN
         The number of columns in K will determine the number of threads
         But it should be multiple of 32
+        Get bc such that kN is a multiple of bc
     */
-    int Bc = 17;
+
+    int Bc = 32; 
     int Tc = (kN + Bc - 1) / Bc;
     
     dim3 block(Bc, 1, 1);
