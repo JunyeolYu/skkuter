@@ -59,7 +59,7 @@ void checkLast(const char* const file, const int line)
 #define BTYPE __nv_bfloat16
 
 __global__
-void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mask, BTYPE* o_proj,
+void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mask, 
                                 float div,
                                 int Tc, int Bc,
                                 int d, int qN, int kN){
@@ -149,20 +149,16 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
         o[i] = sum;
     }
 
-
-
 }
 
 
 
-torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask,
-                                torch::Tensor o_proj){
+torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask){
 
     K = K.transpose(2,3).contiguous();
 
     //make sure they are contiguous
     Q = Q.contiguous();
-    o_proj = o_proj.contiguous();
     mask = mask.contiguous();
 
 
@@ -191,10 +187,9 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     __nv_bfloat16* V_ptr = reinterpret_cast<__nv_bfloat16*>(V.data_ptr());
     __nv_bfloat16* O_ptr = reinterpret_cast<__nv_bfloat16*>(O.data_ptr());
     __nv_bfloat16* mask_ptr = reinterpret_cast<__nv_bfloat16*>(mask.data_ptr());
-    __nv_bfloat16* o_proj_ptr = reinterpret_cast<__nv_bfloat16*>(o_proj.data_ptr());
 
     
-    attention_forward_kernel<<<grid, block, kN*2>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr, o_proj_ptr,
+    attention_forward_kernel<<<grid, block, kN*2>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
         div,
         Tc, Bc,
         d, qN, kN);
@@ -203,9 +198,6 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     CHECK_LAST_CUDA_ERROR();
 
     return O;
-
-    
-
 
 }
 

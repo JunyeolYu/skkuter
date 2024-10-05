@@ -6,5 +6,4 @@
 
 
 void myTest();
-torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask,
-                                torch::Tensor o_proj);
+torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask);

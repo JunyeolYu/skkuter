@@ -122,8 +122,7 @@ struct DecoderLayer {
 
 
         //myTest();
-        value_states = attention_forward(query_states, key_states, value_states, attention_mask
-                                        o_proj.t());
+        value_states = attention_forward(query_states, key_states, value_states, attention_mask);
 
 
         ////////////////////////////////////////////////////////////////////////////////////////
