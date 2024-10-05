@@ -28,21 +28,19 @@ torch::Tensor RMSnorm_forward(torch::Tensor hidden_states, double eps) {
 }
 
 struct Cache {
-    Cache(int64_t batch_size, int64_t seq_len, int64_t num_layers) {
+    Cache(int64_t bsz, int64_t seq_len, int64_t n_layers) {
         current_length = 0;
+        num_layers = n_layers;
+        batch_size = bsz;
         max_seq_length = seq_len + 25; // FIXME: this should be changed
-        auto options = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA);
-        for (int i = 0; i < num_layers; i++) {
-            
-            key_cache.push_back(torch::zeros({batch_size, 10, max_seq_length, 128}, options));
-            value_cache.push_back(torch::zeros({batch_size, 10, max_seq_length, 128}, options));
-        }
+
+        // store key_cache and value_cache as single large tensors
+        options = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA);
+        key_cache=torch::zeros({num_layers, batch_size, 10, max_seq_length, 128}, options);
+        value_cache=torch::zeros({num_layers, batch_size, 10, max_seq_length, 128}, options);
     }
 
     int64_t get_seq_length(int64_t layer_idx = 0) {
-        if ((int64_t)key_cache.size() <= layer_idx) {
-            return 0;
-        }
         return current_length;
     }
     py::object get_max_length() {
@@ -50,25 +48,29 @@ struct Cache {
     }
 
     torch::Tensor update_key(torch::Tensor key_states, int64_t layer_idx) {
-        int64_t new_tokens = key_states.size(-2);
-        if (current_length + key_states.size(2) <= max_seq_length) {
-            key_cache[layer_idx].slice(2, current_length, current_length + new_tokens) = key_states;
-            return key_cache[layer_idx].slice(2, 0, current_length + new_tokens);
-        } else {
-            key_cache[layer_idx] = std::move(torch::cat({key_cache[layer_idx],key_states}, -2));
-            return key_cache[layer_idx];
+        int64_t next_length = current_length + key_states.size(-2);
+        
+        // when preallocated memory is exceeded
+        if (next_length > max_seq_length && layer_idx == 0) {
+            key_cache = std::move(torch::cat({key_cache, torch::zeros({num_layers, batch_size, 10, 1, 128}, options)}, -2));
         }
+
+        // update last key states
+        key_cache[layer_idx].slice(2, current_length, next_length) = key_states;
+        return key_cache[layer_idx].slice(2, 0, next_length);
     }
 
     torch::Tensor update_value(torch::Tensor value_states, int64_t layer_idx) {
-        int64_t new_tokens = value_states.size(-2);
-        if (current_length + value_states.size(2) <= max_seq_length) {
-            value_cache[layer_idx].slice(2, current_length, current_length + new_tokens) = value_states;
-            return value_cache[layer_idx].slice(2, 0, current_length + new_tokens);
-        } else {
-            value_cache[layer_idx] = std::move(torch::cat({value_cache[layer_idx],value_states}, -2));
-            return value_cache[layer_idx];
+        int64_t next_length = current_length + value_states.size(-2);
+        
+        // when preallocated memory is exceeded
+        if (next_length > max_seq_length && layer_idx == 0) {
+            value_cache = std::move(torch::cat({value_cache, torch::zeros({num_layers, batch_size, 10, 1, 128}, options)}, -2));
         }
+
+        // update last value states
+        value_cache[layer_idx].slice(2, current_length, next_length) = value_states;
+        return value_cache[layer_idx].slice(2, 0, next_length);
     }
 
     void length_update(int64_t x) {
@@ -79,10 +81,13 @@ struct Cache {
         return get_seq_length(layer_idx);
     }
 
-    std::vector<torch::Tensor> key_cache;
-    std::vector<torch::Tensor> value_cache;
+    torch::Tensor key_cache;
+    torch::Tensor value_cache;
+    torch::TensorOptions options;
     int64_t current_length;
     int64_t max_seq_length;
+    int64_t num_layers;
+    int64_t batch_size;
 };
 
 struct DecoderLayer {
