@@ -53,17 +53,9 @@ struct DecoderLayer {
 
     torch::Tensor forward(torch::Tensor x, torch::Tensor attention_mask, torch::Tensor position_ids, py::object past_key_value, bool output_attentions) {
         torch::NoGradGuard no_grad;
-
-        
-        // auto qkv = cuda_attn_forward(
-        //     /*RMSNorm:1*/x, rms_norm_eps, input_layernorm,
-        //     /*QKVMatrix*/qkv_proj.t());
-        
-        
-        
-        
+     
         // input_layernorm
-        auto hidden_states = input_layernorm * RMSnorm_forward(x, rms_norm_eps);
+        auto hidden_states = rms_forward(x, rms_norm_eps, input_layernorm);
         auto qkv = torch::matmul(hidden_states, qkv_proj.t());
 
         
@@ -106,22 +98,6 @@ struct DecoderLayer {
         // repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(kv_res[0].cast<torch::Tensor>(), num_key_value_groups);
         value_states = repeat_kv(kv_res[1].cast<torch::Tensor>(), num_key_value_groups);
-
-
-        //size of attention mask
-        
-
-        // reuse tensor, attn_weight -> query_states
-        ////////////////////////****************ATTENTION BLOCK****************///////////////*/
-        
-        //query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
-        //query_states = query_states + attention_mask;
-        //query_states = torch::nn::functional::softmax(query_states, torch::nn::functional::SoftmaxFuncOptions(-1.f)).to(value_states.scalar_type());
-        // reuse tensor, attn_output -> value_states
-        //value_states = torch::matmul(query_states, value_states);
-
-
-        //myTest();
         value_states = attention_forward(query_states, key_states, value_states, attention_mask);
 
 
@@ -132,20 +108,12 @@ struct DecoderLayer {
         value_states = value_states.reshape({bsz, q_len, hidden_size});
 
         //current phase
-        //value_states = torch::matmul(value_states, o_proj.t());
-        //key_states = x + value_states;
-        key_states = post_attention_forward(value_states, o_proj.t(), x);
+        value_states = torch::matmul(value_states, o_proj.t());
+        key_states = x + value_states;
+        //key_states = post_attention_forward(value_states, o_proj.t(), x);
 
 
-        hidden_states = post_attention_layernorm * RMSnorm_forward(key_states, rms_norm_eps);
-
-        // std::cout << "x: " << x.sizes() << std::endl;
-        // std::cout << "value_states: " << value_states.sizes() << std::endl;
-        // std::cout << "hidden_states: " << hidden_states.sizes() << std::endl;
-        // std::cout << "gate_up_proj: " << gate_up_proj.sizes() << std::endl;
-        // std::cout << "down_proj: " << down_proj.sizes() << std::endl;
-        // std::cout << "post_attention_layernorm: " << post_attention_layernorm.sizes() << std::endl;
-        
+        hidden_states = rms_forward(key_states, rms_norm_eps, post_attention_layernorm);
 
         // mlp
         // gate_up_proj

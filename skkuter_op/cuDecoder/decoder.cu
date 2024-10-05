@@ -169,7 +169,7 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     //For scaling the dot product
     auto div = 1.0f/std::sqrt(static_cast<float>(d));
 
-    int Bc = 64; 
+    int Bc = 128; 
     int Tc = ceil((float)kN / (float)Bc);
     
     dim3 block(Bc, 1, 1);
@@ -282,6 +282,74 @@ torch::Tensor post_attention_forward(torch::Tensor value_state, torch::Tensor o_
 
 
 }
+
+
+
+
+__global__
+void rms_norm_forward_kernel(float* hidden_states, float* rms_norm_weight, float* rsqrt, int seq_len, int N) 
+{
+
+    int current_batch = blockIdx.y;
+    int current_seq = blockIdx.x;
+
+    float* my_hidden_states = hidden_states + (current_seq * N) + (current_batch * seq_len * N);
+    float* my_rsqrt = rsqrt + (current_seq * 1) + (current_batch * seq_len * 1);
+
+    int tid = threadIdx.x;
+
+    for(int i = tid; i < N; i += blockDim.x)
+    {
+        if(i >= N) continue;
+        my_hidden_states[i] = my_hidden_states[i] * (*my_rsqrt) * rms_norm_weight[i];
+    }
+    
+}
+
+torch::Tensor rms_forward(torch::Tensor hidden_states,  double rms_norm_epsilon, torch::Tensor rms_norm_weight) 
+{
+
+   
+    torch::NoGradGuard no_grad;
+    auto input_dtype = hidden_states.scalar_type();
+    hidden_states = hidden_states.to(torch::kFloat32);
+    float* hidden_states_pointer = hidden_states.data_ptr<float>();
+
+    rms_norm_weight = rms_norm_weight.to(torch::kFloat32);
+    float* rms_norm_weight_pointer = rms_norm_weight.data_ptr<float>();
+
+    auto rsqrt = torch::rsqrt(hidden_states.pow(2).mean(-1, true) + rms_norm_epsilon);
+    float* rsqrt_pointer = rsqrt.data_ptr<float>();
+
+    int batch_size = hidden_states.size(0);
+    int seq_len = hidden_states.size(1);
+    int hidden_size = hidden_states.size(2);
+
+    dim3 threads_per_block(1024,1,1);
+    dim3 number_of_blocks(seq_len,batch_size,1);
+    
+
+    rms_norm_forward_kernel<<<number_of_blocks, threads_per_block>>>(
+        hidden_states_pointer, rms_norm_weight_pointer,
+        rsqrt_pointer, 
+        seq_len, hidden_size
+    );
+
+    cudaDeviceSynchronize();
+
+    return hidden_states.to(input_dtype);
+
+
+}
+
+
+
+
+
+
+
+
+
 
 
 void myTest(){
