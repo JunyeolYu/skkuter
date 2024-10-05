@@ -59,6 +59,13 @@ dev_map = {
     'model.norm': 0,
     'lm_head': 0,
 }
+banner = """███████╗██╗  ██╗██╗  ██╗██╗   ██╗████████╗███████╗██████╗
+██╔════╝██║ ██╔╝██║ ██╔╝██║   ██║╚══██╔══╝██╔════╝██╔══██╗
+███████╗█████╔╝ █████╔╝ ██║   ██║   ██║   █████╗  ██████╔╝
+╚════██║██╔═██╗ ██╔═██╗ ██║   ██║   ██║   ██╔══╝  ██╔══██╗
+███████║██║  ██╗██║  ██╗╚██████╔╝   ██║   ███████╗██║  ██║
+╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚══════╝╚═╝  ╚═╝
+"""
 
 def setup_parser():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
@@ -112,6 +119,7 @@ def main():
     
     if impl == "skkuter":
         from modeling.custom_phi3 import Phi3ForCausalLM
+        print(banner)                                                        
     else:
         from transformers import Phi3ForCausalLM
 
