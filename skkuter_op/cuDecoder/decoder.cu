@@ -59,7 +59,7 @@ void checkLast(const char* const file, const int line)
 #define BTYPE __nv_bfloat16
 
 __global__
-void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mask,
+void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mask, BTYPE* o_proj,
                                 float div,
                                 int Tc, int Bc,
                                 int d, int qN, int kN){
@@ -112,7 +112,7 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
     //Simply compute the softmax
     BTYPE sum = CONVERT(0.0f);
     BTYPE max = shared_o[0];
-    for(int i = 0; i < kN; i++){;
+    for(int i = 1; i < kN; i++){;
         if(shared_o[i] > max){
             max = shared_o[i];
         }
@@ -135,29 +135,34 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
 
     __syncthreads();
 
-    if(tx == 0){
-        for(int i = 0; i < d; i++){
-            BTYPE sum = CONVERT(0.0f);
-            for(int j = 0; j < kN; j++){
-                sum += shared_o[j] * v[j * d + i];
-            }
-            o[i] = sum;
-        }
+    
+    // shared_o is 1xkN
+    // v is d x kN (transposed v as well)
+    for(int i = tx; i < d; i += Bc){
 
+        if(i >= d) continue;
+        
+        BTYPE sum = CONVERT(0.0f);
+        for(int j = 0; j < kN; j++){
+            sum += shared_o[j] * v[j * d + i];
+        }
+        o[i] = sum;
     }
+
+
 
 }
 
 
 
-torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask){
+torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor mask,
+                                torch::Tensor o_proj){
 
-    K = K.transpose(2,3);
+    K = K.transpose(2,3).contiguous();
 
     //make sure they are contiguous
     Q = Q.contiguous();
-    K = K.contiguous();
-    V = V.contiguous();
+    o_proj = o_proj.contiguous();
     mask = mask.contiguous();
 
 
@@ -186,9 +191,10 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     __nv_bfloat16* V_ptr = reinterpret_cast<__nv_bfloat16*>(V.data_ptr());
     __nv_bfloat16* O_ptr = reinterpret_cast<__nv_bfloat16*>(O.data_ptr());
     __nv_bfloat16* mask_ptr = reinterpret_cast<__nv_bfloat16*>(mask.data_ptr());
+    __nv_bfloat16* o_proj_ptr = reinterpret_cast<__nv_bfloat16*>(o_proj.data_ptr());
 
-
-    attention_forward_kernel<<<grid, block, kN*2>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
+    
+    attention_forward_kernel<<<grid, block, kN*2>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr, o_proj_ptr,
         div,
         Tc, Bc,
         d, qN, kN);

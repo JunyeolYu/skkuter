@@ -122,7 +122,8 @@ struct DecoderLayer {
 
 
         //myTest();
-        value_states = attention_forward(query_states, key_states, value_states, attention_mask);
+        value_states = attention_forward(query_states, key_states, value_states, attention_mask
+                                        o_proj.t());
 
 
         ////////////////////////////////////////////////////////////////////////////////////////
@@ -131,6 +132,8 @@ struct DecoderLayer {
         value_states = value_states.transpose(1, 2).contiguous();
         value_states = value_states.reshape({bsz, q_len, hidden_size});
         value_states = torch::matmul(value_states, o_proj.t());
+        //print the shape of o_proj before and after matmul
+
 
         // post_attention_layernorm
         // reuse tensor, residual -> key_states
