@@ -55,6 +55,7 @@ void checkLast(const char* const file, const int line)
 
 
 #define CONVERT(x) __float2bfloat16(x)
+#define CONVERT_TO_FLOAT(x) __bfloat162float(x)
 #define BTYPE __nv_bfloat16
 
 __global__
@@ -83,63 +84,62 @@ void attention_forward_kernel(BTYPE* Q, BTYPE* K, BTYPE* V, BTYPE* O, BTYPE* mas
     BTYPE* v = V + v_offset; // (kN x d)
     BTYPE* k = K + k_offset; // (d x kN)
 
-    BTYPE divv = CONVERT(div);
-    extern __shared__ BTYPE sram[];
-    BTYPE* shared_o = sram;
+    extern __shared__ float sram[];
+    float* shared_o = sram;
 
     
     for(int i = 0; i < Tc; i++){
         BTYPE* k_ptr = k + (i * Bc); // (d x Bc)
-        BTYPE sum = CONVERT(0.0f);
+        float sum = 0.0f;
 
-        //skip if the index is out of bound
-        if(i * Bc + tx >= kN)
+        if(i*Bc + tx >= kN){
             continue;
-
-        for(int j = 0; j < d; j++){
-            sum += q[j] * k_ptr[j * kN + tx];
         }
 
-        shared_o[i*Bc+tx] = sum * divv;
-        shared_o[i*Bc+tx] += mask[mask_offset + i*Bc+tx];
+        for(int j = 0; j < d; j++){
+            sum += CONVERT_TO_FLOAT(q[j] * k_ptr[j * kN + tx]);
+        }
+
+        shared_o[i*Bc+tx] = sum * div;
+        shared_o[i*Bc+tx] += CONVERT_TO_FLOAT(mask[mask_offset + i*Bc+tx]);
         
     }
 
     __syncthreads();
 
     //Simply compute the softmax
-    BTYPE sum = CONVERT(0.0f);
-    BTYPE max = -CUDART_INF_BF16;
+    float sum = 0.0f;
+    float max = -INFINITY;
     for(int i = 0; i < kN; i++){;
         if(shared_o[i] > max){
             max = shared_o[i];
         }
     }
 
+    for(int i = tx; i < kN; i = i + Bc){
+        if(i < kN)
+            shared_o[i] = __expf(shared_o[i] - max);
+    }
+
     for(int i = 0; i < kN; i++){
-        shared_o[i] = hexp(shared_o[i] - max);
         sum += shared_o[i];        
     }
 
-
-    //I have bc number of threads and the row size is kN
-    int elements_per_thread = (kN + Bc - 1) / Bc;
-    int my_index = tx * elements_per_thread;
-
-    for(int i = 0; i < elements_per_thread; i++){
-        shared_o[my_index + i] /= sum;
+    for(int i = tx; i < kN; i = i + Bc){
+        if(i < kN)
+            shared_o[i] /= sum;
     }
 
     __syncthreads();
 
     if(tx == 0){
         for(int i = 0; i < d; i++){
-            BTYPE sum = CONVERT(0.0f);
+            float sum = 0.0f;
             for(int j = 0; j < kN; j++){
-                sum += shared_o[j] * v[j * d + i];
+                sum += shared_o[j] * CONVERT_TO_FLOAT(v[j * d + i]);
             }
 
-            o[i] = sum;
+            o[i] = CONVERT(sum);
         }
 
     }
@@ -174,7 +174,7 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     */
 
     int Bc = 32; 
-    int Tc = (kN + Bc - 1) / Bc;
+    int Tc = ceil((float)kN / (float)Bc);
     
     dim3 block(Bc, 1, 1);
     dim3 grid(qN,nH, batch);
@@ -196,7 +196,7 @@ torch::Tensor attention_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor 
     /* KHAN
         Launch the kernel for attention
     */
-    attention_forward_kernel<<<grid, block>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
+    attention_forward_kernel<<<grid, block, kN*4>>>(Q_ptr, K_ptr, V_ptr, O_ptr, mask_ptr,
         div,
         Tc, Bc,
         d, qN, kN);
@@ -223,7 +223,7 @@ void myTest(){
     torch::Tensor V2 = torch::empty({1, 40, 170, 128}, ELEMENT_TYPE).to(torch::kCUDA);
 
     torch::Tensor mask = torch::randn({1, 1, 1, 170}, ELEMENT_TYPE).to(torch::kCUDA);
-    mask.fill_(0);
+    mask.fill_(1);
     auto O = attention_forward(Q, K, V, mask);
 
     Q2.copy_(Q);

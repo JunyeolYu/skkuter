@@ -114,7 +114,7 @@ struct DecoderLayer {
         // reuse tensor, attn_weight -> query_states
         ////////////////////////****************ATTENTION BLOCK****************///////////////*/
         
-        query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
+/*         query_states = torch::matmul(query_states, key_states.transpose(2, 3)) / div;
 
         auto mask_size = attention_mask.sizes();
         std::cout << "Mask sizes :" << mask_size << std::endl;
@@ -127,12 +127,24 @@ struct DecoderLayer {
 
         auto query_sizes = query_states.sizes();
         std::cout << "Query sizes :" << query_sizes<< std::endl; 
-        
-        myTest();
+         */
+        //myTest();
         //value_states = cuda_attn_forward(query_states, key_states.transpose(2,3), value_states, attention_mask);
-        
-        ////////////////////////////////////////////////////////////////////////////////////////
+        value_states = attention_forward(query_states, key_states, value_states, attention_mask);
 
+        //print all the shapes of the tensors
+        auto query_sizes = query_states.sizes();
+        std::cout << "Query sizes :" << query_sizes<< std::endl;
+        auto key_sizes = key_states.sizes();
+        std::cout << "Key sizes :" << key_sizes<< std::endl;
+        auto value_sizes = value_states.sizes();
+        std::cout << "Value sizes :" << value_sizes<< std::endl;
+        auto mask_sizes = attention_mask.sizes();
+        std::cout << "Mask sizes :" << mask_sizes<< std::endl;
+        
+
+
+        ////////////////////////////////////////////////////////////////////////////////////////
 
 
         value_states = value_states.transpose(1, 2).contiguous();
