@@ -59,13 +59,14 @@ dev_map = {
     'model.norm': 0,
     'lm_head': 0,
 }
-banner = """███████╗██╗  ██╗██╗  ██╗██╗   ██╗████████╗███████╗██████╗
-██╔════╝██║ ██╔╝██║ ██╔╝██║   ██║╚══██╔══╝██╔════╝██╔══██╗
-███████╗█████╔╝ █████╔╝ ██║   ██║   ██║   █████╗  ██████╔╝
-╚════██║██╔═██╗ ██╔═██╗ ██║   ██║   ██║   ██╔══╝  ██╔══██╗
-███████║██║  ██╗██║  ██╗╚██████╔╝   ██║   ███████╗██║  ██║
-╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚══════╝╚═╝  ╚═╝
-"""
+banner = """
+███████╗██╗  ██╗██╗  ██╗██╗   ██╗
+██╔════╝██║ ██╔╝██║ ██╔╝██║   ██║ _    
+███████╗█████╔╝ █████╔╝ ██║   ██║| |_  ___  _ __ 
+╚════██║██╔═██╗ ██╔═██╗ ██║   ██║| __// _ \| '_/
+███████║██║  ██╗██║  ██╗╚██████╔╝| |_|  __/| |   
+╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝  \__/\___/|_|   
+"""               
 
 def setup_parser():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
@@ -212,7 +213,7 @@ def main():
                 previous_batch_token_sum = token_length
         if batch>0:
             outputs.append(batch)
-    
+
         # data=data.remove_columns("length")
         # run
         outs = pipe(KeyDataset(data, key), batch_size=outputs, **generation_args)
