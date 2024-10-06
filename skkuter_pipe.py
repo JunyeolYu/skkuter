@@ -28,8 +28,8 @@ class skkuter_pipeline:
     
     def generate(self, prompt, max_new_tokens=50):
         # convert prompts to tensors
-        prompts = self.convert_batch_to_prompts(prompt)
-        inputs = self.tokenizer(prompts, return_tensors="pt", padding=True).to(self.model.device)
+        # prompts = self.convert_batch_to_prompts(prompt)
+        inputs = self.tokenizer(prompt, return_tensors="pt", padding=True).to(self.model.device)
         
         batch_size = inputs.input_ids.shape[0]
         seq_len = inputs.input_ids.shape[1]
@@ -89,7 +89,7 @@ class skkuter_pipeline:
     def __call__(
         self,
         prompts,
-        batch_size=1,
+        batch_size: list = None,
         max_new_tokens=50,
         return_full_text=False,
         temperature=0.0,
@@ -97,7 +97,9 @@ class skkuter_pipeline:
         **kwargs
     ):
         if isinstance(prompts, list):
+            prompts = self.convert_batch_to_prompts(prompts)
             return self.generate(prompts, max_new_tokens)[0]
+        
         elif isinstance(prompts, datasets.Dataset) or isinstance(prompts, KeyDataset):
             if isinstance(prompts, KeyDataset):
                 data = prompts.dataset
@@ -106,11 +108,15 @@ class skkuter_pipeline:
                 data = prompts
                 key = 'message'
             
-            n = len(prompts)
+            # convert chat form to single string
+            prompts = self.convert_batch_to_prompts(data[key])
+
+            # run
+            idx = 0
             outputs = []
-            for i in range(0, n, batch_size):
-                prompt = data[key][i:i + batch_size]
-                output = self.generate(prompt, max_new_tokens)
+            for bs in batch_size:
+                output = self.generate(prompts[idx:idx+bs], max_new_tokens)
+                idx+=bs
                 outputs += output
             return outputs
         else:

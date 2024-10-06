@@ -181,8 +181,44 @@ def main():
 
     ####### Section 3. Load data and Inference -> Performance evaluation part #######
     start = time.time()
+    gen_tokens = 50
     data = load_dataset("json", data_files=dataset_path)['train']
-    outs = pipe(KeyDataset(data, 'message'), batch_size=bs, **generation_args)
+    key="message"
+    
+    if impl == "skkuter":
+        # pre-processing (sorting)
+        prompts = pipe.convert_batch_to_prompts(data[key])
+        
+        length = []
+        for i in prompts:
+            tokenized = tokenizer(i, return_tensors="pt")
+            length.append(tokenized["input_ids"].shape[1])
+        data=data.add_column("length", length)
+        data=data.sort('length', reverse=True)
+        
+        # pre-processing (construct batch size)
+        outputs=[]
+        batch=0
+        previous_batch_token_sum = 0
+        for prompt in data:
+            token_length = prompt['length']
+            if previous_batch_token_sum==0: previous_batch_token_sum=token_length
+            if (previous_batch_token_sum + gen_tokens) * (batch+1) <= 2048:
+                batch+=1
+            else:
+                if batch>0:
+                    outputs.append(batch)
+                batch = 1
+                previous_batch_token_sum = token_length
+        if batch>0:
+            outputs.append(batch)
+    
+        # data=data.remove_columns("length")
+        # run
+        outs = pipe(KeyDataset(data, key), batch_size=outputs, **generation_args)
+    else:
+        # run
+        outs = pipe(KeyDataset(data, key), batch_size=bs, **generation_args)
     end = time.time()
 
     ####### Section 4. Accuracy (Just for leasderboard) #######
