@@ -22,3 +22,6 @@ Assuming the model repository is available in `/path/to/model`. Use the followin
 cd skkuter
 python3 test_script -m /path/to/model -b 1 -t test_dataset.json -i skkuter
 ```
+
+# Rank
+Placed 5th out of 47 teams
